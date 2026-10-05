@@ -1,6 +1,16 @@
-import {useState} from 'react';import type {ComponentType} from 'react';import {tok} from './api';
-import Login from './pages/Login';import Dashboard from './pages/Dashboard';import Analytics from './pages/Analytics';import Competitors from './pages/Competitors';import Content from './pages/Content';import Schedule from './pages/Schedule';import Settings from './pages/Settings';import Roadmap from './pages/Roadmap';
-const PAGES:Record<string,ComponentType>={Dashboard,'My Account':Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,Settings,Roadmap};
-export default function App(){const[t,setT]=useState(tok()),[p,setP]=useState('Dashboard');
+import {useState,useEffect} from 'react';import type {ComponentType} from 'react';import {tok} from './api';
+import Login from './pages/Login';import Dashboard from './pages/Dashboard';import Analytics from './pages/Analytics';import Competitors from './pages/Competitors';import Content from './pages/Content';import Schedule from './pages/Schedule';import Settings from './pages/Settings';import Roadmap from './pages/Roadmap';import Finance from './pages/Finance';
+import Assistant from './Assistant';import {ICONS} from './icons';
+const PAGES:Record<string,ComponentType>={Dashboard,'My Account':Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,'Finance & Capital':Finance,Settings,Roadmap};
+export default function App(){const[t,setT]=useState(tok()),[p,setP]=useState('Dashboard'),[open,setOpen]=useState(false);
+ useEffect(()=>{const k=(e:KeyboardEvent)=>e.key==='Escape'&&setOpen(false);addEventListener('keydown',k);return()=>removeEventListener('keydown',k)},[]);
  if(!t)return <Login onAuth={()=>setT(tok())}/>;const P=PAGES[p];
- return <><header><b>🚀 GrowthEngine</b>{Object.keys(PAGES).map(k=><button key={k} className={k===p?'on':''} onClick={()=>setP(k)}>{k}</button>)}<button style={{marginLeft:'auto'}} onClick={()=>{localStorage.removeItem('t');setT('')}}>Log out</button></header><main><P/></main></>}
+ return <div className="shell">
+  <aside className="rail"><div className="logo">G</div>
+   {/* Tabs stay hidden until the menu is opened */}
+   <button className="ib" aria-label="Menu" onClick={()=>setOpen(o=>!o)}>{ICONS.menu}</button>
+   <button className="ib" aria-label="Log out" style={{marginTop:'auto'}} onClick={()=>{localStorage.removeItem('t');setT('')}}>{ICONS.logout}</button></aside>
+  {open&&<div className="scrim" onClick={()=>setOpen(false)}/>}
+  <nav className={'drawer'+(open?' open':'')}><h2>Explore</h2>{Object.keys(PAGES).map(k=><button key={k} className={k===p?'on':''} onClick={()=>{setP(k);setOpen(false)}}>{ICONS[k]}{k}</button>)}</nav>
+  <main><h2 style={{margin:'0 0 16px',fontWeight:600}}>{p}</h2><P/></main>
+  <Assistant/></div>}
