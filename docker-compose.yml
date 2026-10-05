@@ -1,0 +1,9 @@
+services:
+  db: {image: "postgres:16", environment: {POSTGRES_USER: ge, POSTGRES_PASSWORD: ge, POSTGRES_DB: ge}, ports: ["5432:5432"]}
+  redis: {image: "redis:7", ports: ["6379:6379"]}
+  api:
+    build: .
+    env_file: .env
+    environment: {DATABASE_URL: "postgres://ge:ge@db:5432/ge", REDIS_URL: "redis://redis:6379", INLINE_WORKER: "1"}
+    ports: ["3000:3000"]
+    depends_on: [db, redis]
