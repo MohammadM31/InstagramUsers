@@ -1,3 +1,4 @@
+import {assistant,financeRoute} from './assistant.js';
 import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ} from './queue.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';
 export const api=Router();api.use(requireAuth);
 const wrap=f=>(req,res,next)=>Promise.resolve(f(req,res,next)).catch(next); // Express 4 needs this for async errors
@@ -52,3 +53,5 @@ post('/schedule',async(req,res)=>{const{caption,image,platforms,scheduledAt}=req
  const[r]=await q('INSERT INTO scheduled_posts(user_id,caption,image,platforms,scheduled_at) VALUES($1,$2,$3,$4,$5) RETURNING id',[req.uid,caption,image||null,platforms||['instagram'],scheduledAt]);res.json(r)});
 patch('/schedule/:id',async(req,res)=>{await q(`UPDATE scheduled_posts SET status='scheduled',error=NULL,scheduled_at=COALESCE($3,now()) WHERE id=$1 AND user_id=$2`,[req.params.id,req.uid,req.body?.scheduledAt||null]);res.json({ok:true})});
 del('/schedule/:id',async(req,res)=>{await q('DELETE FROM scheduled_posts WHERE id=$1 AND user_id=$2',[req.params.id,req.uid]);res.json({ok:true})});
+/* assistant + finance */
+post('/assistant',assistant);get('/finance/plan',financeRoute);
