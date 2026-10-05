@@ -1,0 +1,3 @@
+import {Card} from '../ui';
+const R:[string,string][]=[['Hashtag set builder + A/B tracking','API ready (/hashtag-sets), UI next'],['Audio intelligence','Needs Reels audio data source'],['Engagement automation (webhooks)','Needs Meta app review'],['SEO & website companion','Schema/CWV/GBP services'],['Algorithm lab (correlation, A/B stats, ER model)','Needs TimescaleDB + scipy worker'],['Reports (PDF/Excel), white-label','Export service'],['Cross-platform publishing','TikTok/YouTube/X/LinkedIn APIs']];
+export default function Roadmap(){return <Card full t="Not built yet"><table><tbody>{R.map(([a,b])=><tr key={a}><td>{a}</td><td className="mu">{b}</td></tr>)}</tbody></table></Card>}

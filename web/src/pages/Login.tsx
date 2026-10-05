@@ -1,0 +1,6 @@
+import {useState} from 'react';import {api} from '../api';
+export default function Login({onAuth}:{onAuth:()=>void}){const[m,setM]=useState<'login'|'register'>('login'),[email,setE]=useState('demo@growthengine.ai'),[password,setP]=useState('demo1234'),[tos,setT]=useState(false),[err,setErr]=useState('');
+ const go=async()=>{try{const r=await api(`/auth/${m}`,{method:'POST',body:{email,password,acceptTos:tos}});localStorage.setItem('t',r.token);onAuth()}catch(e:any){setErr(e.message)}};
+ return <div className="login card"><h2>🚀 GrowthEngine AI</h2><input value={email} onChange={e=>setE(e.target.value)} placeholder="email"/><input type="password" value={password} onChange={e=>setP(e.target.value)} placeholder="password"/>
+ {m==='register'&&<label className="mu"><input type="checkbox" checked={tos} onChange={e=>setT(e.target.checked)} style={{width:'auto'}}/> I accept the ToS. Only public data is collected.</label>}
+ {err&&<div className="dn">{err}</div>}<div className="row"><button className="btn" onClick={go}>{m==='login'?'Log in':'Create account'}</button><button className="btn g" onClick={()=>setM(m==='login'?'register':'login')}>{m==='login'?'Register':'Back'}</button></div><div className="mu">Demo: demo@growthengine.ai / demo1234 (after npm run seed)</div></div>}

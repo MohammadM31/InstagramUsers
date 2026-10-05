@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS users(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),email text UNIQUE NOT NULL,pass_hash text NOT NULL,tos_accepted_at timestamptz NOT NULL,created_at timestamptz DEFAULT now());
+CREATE TABLE IF NOT EXISTS api_keys(user_id uuid REFERENCES users ON DELETE CASCADE,name text,enc text NOT NULL,PRIMARY KEY(user_id,name));
+CREATE TABLE IF NOT EXISTS posts(id serial PRIMARY KEY,user_id uuid REFERENCES users ON DELETE CASCADE,type text,posted_at timestamptz,likes int,comments int,saves int,shares int,reach int,impressions int,watch_s int,caption text);
+CREATE TABLE IF NOT EXISTS competitors(id serial PRIMARY KEY,user_id uuid REFERENCES users ON DELETE CASCADE,handle text NOT NULL,followers int,last_scraped timestamptz,UNIQUE(user_id,handle));
+CREATE TABLE IF NOT EXISTS competitor_posts(id serial PRIMARY KEY,competitor_id int REFERENCES competitors ON DELETE CASCADE,type text,posted_at timestamptz,likes int,comments int,caption text,expires_at timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS scrape_audit(id serial PRIMARY KEY,user_id uuid REFERENCES users ON DELETE CASCADE,handle text,source text,disclaimer text,at timestamptz DEFAULT now());
+CREATE TABLE IF NOT EXISTS hashtag_sets(id serial PRIMARY KEY,user_id uuid REFERENCES users ON DELETE CASCADE,name text,tags text[]);
+CREATE TABLE IF NOT EXISTS scheduled_posts(id serial PRIMARY KEY,user_id uuid REFERENCES users ON DELETE CASCADE,caption text NOT NULL,image text,platforms text[] DEFAULT '{instagram}',scheduled_at timestamptz NOT NULL,status text DEFAULT 'scheduled',error text,published_at timestamptz);
