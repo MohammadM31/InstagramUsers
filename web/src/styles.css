@@ -2,7 +2,8 @@
 :root{--bg:#fff;--card:#fff;--soft:#fafafa;--bd:#dbdbdb;--tx:#262626;--mu:#737373;--ac:#0095f6;--up:#00a35c;--dn:#ed4956;
 --grad:linear-gradient(45deg,#f09433,#e6683c 25%,#dc2743 50%,#cc2366 75%,#bc1888);
 --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-@media(prefers-color-scheme:dark){:root{--bg:#000;--card:#000;--soft:#121212;--bd:#262626;--tx:#f5f5f5;--mu:#a8a8a8}}
+:root[data-theme=dark]{--bg:#000;--card:#000;--soft:#121212;--bd:#262626;--tx:#f5f5f5;--mu:#a8a8a8}
+:root[data-theme=light]{--bg:#fff;--card:#fff;--soft:#fafafa;--bd:#dbdbdb;--tx:#262626;--mu:#737373}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/18px var(--font)}
 .shell{display:flex;min-height:100vh}
 .rail{width:72px;border-right:1px solid var(--bd);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:8px;position:sticky;top:0;height:100vh;flex:none}
@@ -34,3 +35,10 @@ input,select,textarea{background:var(--soft);color:var(--tx);border:1px solid va
 .composer form{display:flex;align-items:center;background:var(--soft);border:1px solid var(--bd);border-radius:22px;padding:0 6px 0 16px;height:44px}
 .composer input{flex:1;border:0;background:none;outline:none;padding:0}.composer form button{background:none;border:0;color:var(--ac);font-weight:600;cursor:pointer;padding:8px 12px}.composer form button:disabled{opacity:.4}
 @media(max-width:700px){.composer{left:50%;width:calc(100vw - 96px)}}
+
+.top{display:flex;align-items:baseline;gap:12px;margin:0 0 20px;padding-bottom:12px;border-bottom:1px solid var(--bd)}
+.wm{font:italic 600 26px/1 'Segoe Script','Brush Script MT',cursive;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:8px}
+.chips button{background:var(--soft);border:1px solid var(--bd);color:var(--tx);border-radius:99px;padding:5px 12px;font:12px var(--font);cursor:pointer}.chips button:hover{border-color:var(--ac)}
+.composer form button.on{color:var(--up)}.composer form button svg{width:20px;height:20px}
+a.btn{text-decoration:none;display:inline-block}

@@ -1,6 +1,6 @@
 import express from 'express';import helmet from 'helmet';import cors from 'cors';import rateLimit from 'express-rate-limit';
 import {auth} from './auth.js';import {api} from './routes.js';import {startWorker,startPublisher} from './worker.js';import path from 'node:path';import fs from 'node:fs';
-const app=express();app.set('trust proxy',1);app.use(helmet(),cors({origin:process.env.CORS_ORIGIN?.split(',')||true}),express.json({limit:'1mb'}));
+const app=express();app.set('trust proxy',1);app.use(helmet(),cors({origin:process.env.CORS_ORIGIN?.split(',')||true}),express.json({limit:'8mb'}));
 app.use(rateLimit({windowMs:6e4,limit:120}));
 app.get('/health',(_,r)=>r.json({ok:true}));
 app.use('/api/auth',auth);app.use('/api',api);

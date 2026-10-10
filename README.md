@@ -16,7 +16,8 @@ Express + Postgres + Redis/BullMQ. Auth (JWT, ToS-gated signup), dashboard KPIs,
 
 ## Integration points
 - `src/worker.js` fetchProfile: Business Discovery API when IG_* set, else demo data. Add a proxy scraper there only if you accept the ToS risk.
-- `src/images.js`: swap Replicate call for your ProductAI service (Flux Kontext / Recraft routing) or add S3 storage.
+- `src/images.js`: ProductAI's model registry, reference-image routing and fallback chain are ported here. Attach a product photo in the chat bar and it auto-routes to Flux Kontext. Add S3 storage for production.
+- `src/assistant.js`: one-shot assistant. With LLM_API_KEY it picks one action from live page metrics; without it, regex rules do.
 - Not built yet: IG publishing, webhooks, TimescaleDB aggregates, React app.
 
 ## Frontend (web/) — React + TypeScript + Recharts
