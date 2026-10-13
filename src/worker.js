@@ -1,3 +1,4 @@
+import './loadenv.js'; // first import: cache.js and db.js read REDIS_URL / DATABASE_URL when they load
 import {Worker} from 'bullmq';import {redis,cached} from './cache.js';import {q,db} from './db.js';import {generateImage} from './images.js';import {normalizePosts} from './importer.js';import {keyFor} from './keys.js';import {validateEnv} from './config.js';
 const DISCLAIMER='Public data only. User confirmed ToS at signup; scrape logged for audit.';
 async function fetchProfile(handle){

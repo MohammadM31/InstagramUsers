@@ -1,3 +1,4 @@
+import './loadenv.js'; // first import: .env must be loaded before db.js / cache.js read their variables
 import {validateEnv} from './config.js';validateEnv({needDb:true});
 import bcrypt from 'bcryptjs';import {db,q} from './db.js';
 const[u]=await q(`INSERT INTO users(email,pass_hash,tos_accepted_at) VALUES('demo@growthengine.ai',$1,now()) ON CONFLICT(email) DO UPDATE SET email=EXCLUDED.email RETURNING id`,[await bcrypt.hash('demo1234',10)]);

@@ -1,3 +1,4 @@
+import './loadenv.js'; // first import: .env must be loaded before db.js / cache.js read their variables
 import {validateEnv} from './config.js';validateEnv({needDb:true});
 import fs from 'node:fs';import {db} from './db.js';
 await db.query(fs.readFileSync(new URL('../db/schema.sql',import.meta.url),'utf8'));console.log('migrated');await db.end();

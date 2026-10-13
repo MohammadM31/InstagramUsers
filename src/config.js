@@ -1,3 +1,4 @@
+import './loadenv.js'; // load ./.env first (no --env-file needed)
 // Boot-time environment validation (roadmap 0.2). Call validateEnv() at the top of every entry point.
 // Pure: takes an env object, returns a list of problems, so it is unit-testable.
 export const DEV_SECRET = 'dev-secret-change-me';

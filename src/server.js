@@ -1,3 +1,4 @@
+import './loadenv.js'; // first import: .env must be loaded before db.js / cache.js read their variables
 import {validateEnv} from './config.js';validateEnv(); // 0.2: exit nonzero with a clear message before anything else loads
 import express from 'express';import helmet from 'helmet';import cors from 'cors';import rateLimit from 'express-rate-limit';
 import {db} from './db.js';import {redis} from './cache.js';import {auth} from './auth.js';import {api} from './routes.js';import {startWorker,startPublisher} from './worker.js';import path from 'node:path';import fs from 'node:fs';
