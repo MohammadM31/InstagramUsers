@@ -30,3 +30,13 @@ export function normalizePosts(input) {
   });
   return { rows, invalid };
 }
+
+// 0.1b: collapse rows that share the dedupe key (user is implicit; posted_at + type + caption) INSIDE one import.
+// ON CONFLICT DO UPDATE refuses to touch the same row twice in a single statement, so this must run first.
+// keepLast: for refresh imports the later row in the file wins; otherwise the first one wins (what DO NOTHING does).
+export const dedupeKey = r => `${r.posted_at}|${r.type}|${r.caption ?? ''}`;
+export function dedupeRows(rows, keepLast = false) {
+  const seen = new Map();
+  for (const r of rows) { const k = dedupeKey(r); if (keepLast || !seen.has(k)) seen.set(k, r); }
+  return [...seen.values()];
+}

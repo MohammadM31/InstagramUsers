@@ -2,7 +2,17 @@ const P=(d:string)=><svg width="24" height="24" viewBox="0 0 24 24" fill="none" 
 export const ICONS:Record<string,JSX.Element>={
  menu:P('M3 6h18M3 12h18M3 18h18'),
  Dashboard:P('M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z'),
- 'My Account':P('M4 20V10M10 20V4M16 20v-8M22 20H2'),
+ Statistics:P('M4 20V10M10 20V4M16 20v-8M22 20H2'),
+ // Today's Priorities: one icon per advice kind (advisor.advise)
+ start:P('M12 5v14M5 12h14'),
+ collab:P('M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8'),
+ mention:P('M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.9 7.9'),
+ community:P('M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'),
+ giveaway:P('M20 12v10H4V12M2 7h20v5H2zM12 22V7M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z'),
+ swap:P('M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3'),
+ content:P('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21'),
+ consistency:P('M3 4h18v18H3zM16 2v4M8 2v4M3 10h18'),
+ hashtags:P('M4 9h16M4 15h16M10 3L8 21M16 3l-2 18'),
  Competitors:P('M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8'),
  'Content AI':P('M12 5v14M5 12h14'),
  Scheduling:P('M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2'),

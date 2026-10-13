@@ -17,3 +17,11 @@ CREATE INDEX IF NOT EXISTS import_log_user ON import_log(user_id,at DESC);
 -- extra: hot-path indexes that were missing
 CREATE INDEX IF NOT EXISTS competitor_posts_comp ON competitor_posts(competitor_id,posted_at DESC);
 CREATE INDEX IF NOT EXISTS scheduled_due ON scheduled_posts(status,scheduled_at);
+
+-- ===== Phase 1 / 2.1 (idempotent) =====
+-- 2.1 daily snapshots: one row per post per UTC day. History accumulates only while the worker runs.
+CREATE TABLE IF NOT EXISTS post_snapshots(id serial PRIMARY KEY,post_id int NOT NULL REFERENCES posts ON DELETE CASCADE,captured_at timestamptz NOT NULL DEFAULT now(),likes int,comments int,saves int,shares int,reach int);
+CREATE INDEX IF NOT EXISTS post_snapshots_post_time ON post_snapshots(post_id,captured_at);
+CREATE UNIQUE INDEX IF NOT EXISTS post_snapshots_day ON post_snapshots(post_id,((captured_at AT TIME ZONE 'UTC')::date));
+-- 2.1 baseline: the user's numbers the first time the worker saw them, so the first day does not look like a sudden change.
+CREATE TABLE IF NOT EXISTS metrics_baseline(user_id uuid PRIMARY KEY REFERENCES users ON DELETE CASCADE,captured_at timestamptz NOT NULL DEFAULT now(),reach30d int,er numeric,best_post_er numeric,posts30d int);

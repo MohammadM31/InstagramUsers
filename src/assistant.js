@@ -1,6 +1,6 @@
 // One-shot assistant. Every request returns ONE result object; no conversation state is kept.
 import { q } from './db.js';
-import { generateImage } from './images.js'; // the ProductAI-style image service already lives here
+import { enqueueImage, hasReplicateKey } from './imagejobs.js'; // 0.8: image work runs on the same queue as Content AI
 import { advise, health, financePlan } from './advisor.js';
 import { llmConfig } from './keys.js';
 import { hit } from './ratelimit.js';
@@ -29,6 +29,7 @@ export async function pageMetrics(uid) {
     reach30d: Math.round(c.r1), reachChange: pct(c.r1, c.r0),
     er: +((c.er || 0) * 100).toFixed(2),
     postsPerWeek: +(c.n30 / 4.3).toFixed(1),
+    posts30d: c.n30, totalPosts: c.total,
     mentions30d: c.mentions, collabs30d: c.collabs,
     types: types.map(t => ({ type: t.type, er: t.er || 0, share: c.total ? t.n / c.total : 0 })),
     topCompetitor: comp?.handle || null,
@@ -72,13 +73,16 @@ export async function assistant(req, res) {
   const say = (fallback) => (o.text && String(o.text).slice(0, 200)) || fallback;
 
   if (o.intent === 'image') {
+    // 0.8: queue the job and return its id. The card polls GET /api/content/image/:jobId (same endpoint as Content AI).
     try {
+      if (!await hasReplicateKey(req.uid)) return res.json({ type: 'info', text: 'Image generation needs a Replicate key: add one in Settings or set REPLICATE_API_TOKEN.', data: {} });
       const rl = await hit('image', req.uid, 20, 3600); // assistant images spend from the same budget as Content AI
       if (!rl.ok) return res.status(429).json({ error: rl.msg });
-      const [url] = await generateImage({ prompt: o.imagePrompt || imagePrompt(text), ratio: req.body.ratio || '4:5', overlayText: req.body.overlayText, referenceImage: req.body.referenceImage, uid: req.uid });
-      return res.json({ type: 'image', text: 'Here you go.', data: { url } });
+      const b = req.body || {};
+      const jobId = await enqueueImage(req.uid, { prompt: String(o.imagePrompt || imagePrompt(text)).slice(0, 1000), ratio: b.ratio || '4:5', overlayText: b.overlayText ? String(b.overlayText).slice(0, 120) : undefined, referenceImage: b.referenceImage, n: 1 });
+      return res.json({ type: 'image', text: 'Generating your image…', data: { jobId } });
     } catch (e) {
-      return res.json({ type: 'info', text: e.status === 503 ? 'Image generation needs REPLICATE_API_TOKEN in .env.' : 'Image generation failed. Try again.', data: {} });
+      return res.json({ type: 'info', text: e.status === 503 ? 'Image generation needs a Replicate key: add one in Settings or set REPLICATE_API_TOKEN.' : 'Image generation failed. Try again.', data: {} });
     }
   }
   if (o.intent === 'finance') {

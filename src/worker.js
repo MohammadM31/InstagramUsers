@@ -1,5 +1,5 @@
 import './loadenv.js'; // first import: cache.js and db.js read REDIS_URL / DATABASE_URL when they load
-import {Worker} from 'bullmq';import {redis,cached} from './cache.js';import {q,db} from './db.js';import {generateImage} from './images.js';import {normalizePosts} from './importer.js';import {keyFor} from './keys.js';import {validateEnv} from './config.js';
+import {Worker} from 'bullmq';import {redis,cached} from './cache.js';import {q,db} from './db.js';import {generateImage} from './images.js';import {normalizePosts,dedupeRows} from './importer.js';import {keyFor} from './keys.js';import {validateEnv} from './config.js';import {startSnapshots} from './snapshots.js';
 const DISCLAIMER='Public data only. User confirmed ToS at signup; scrape logged for audit.';
 async function fetchProfile(handle){
  const {IG_ACCESS_TOKEN:t,IG_USER_ID:id}=process.env;
@@ -28,14 +28,22 @@ async function igOwnPosts(uid){ // optional Graph API path; needs IG_ACCESS_TOKE
  for(const m of l.data||[]){let ins={};try{const r=await g(`https://graph.facebook.com/v21.0/${m.id}/insights?metric=reach,saved,shares&access_token=${t}`);ins=Object.fromEntries((r.data||[]).map(x=>[x.name,x.values?.[0]?.value]))}catch{} // insights are best-effort (not available for every media type)
   out.push({posted_at:m.timestamp,type:m.media_type==='VIDEO'?'REEL':m.media_type,likes:m.like_count,comments:m.comments_count,saves:ins.saved,shares:ins.shares,reach:ins.reach,caption:m.caption||''})}
  return out}
-export async function processImport({userId,rows,source}){
+// update=true (0.1b, opt-in): posts that already exist get their metrics refreshed instead of being skipped.
+// Only the seven metric columns change; the identity (date, type, caption) never does. `duplicates` still means
+// "rows that already existed" (so the old contract holds); `updated` is the subset whose numbers actually changed.
+const UPSERT_UPDATE=`ON CONFLICT (user_id,posted_at,type,md5(coalesce(caption,''))) DO UPDATE SET
+  likes=EXCLUDED.likes,comments=EXCLUDED.comments,saves=EXCLUDED.saves,shares=EXCLUDED.shares,reach=EXCLUDED.reach,impressions=EXCLUDED.impressions,watch_s=EXCLUDED.watch_s
+  WHERE (posts.likes,posts.comments,posts.saves,posts.shares,posts.reach,posts.impressions,posts.watch_s) IS DISTINCT FROM
+        (EXCLUDED.likes,EXCLUDED.comments,EXCLUDED.saves,EXCLUDED.shares,EXCLUDED.reach,EXCLUDED.impressions,EXCLUDED.watch_s)`;
+export async function processImport({userId,rows,source,update=false}){
  let input=rows;if(source==='instagram')input=await igOwnPosts(userId);
- const{rows:ok,invalid}=normalizePosts(input);let imported=0;
+ const{rows:valid,invalid}=normalizePosts(input),ok=dedupeRows(valid,update);let imported=0,updated=0;
  for(let i=0;i<ok.length;i+=500){const c=ok.slice(i,i+500),col=k=>c.map(r=>r[k]);
   const r=await db.query(`INSERT INTO posts(user_id,type,posted_at,likes,comments,saves,shares,reach,impressions,watch_s,caption)
-   SELECT $1,* FROM unnest($2::text[],$3::timestamptz[],$4::int[],$5::int[],$6::int[],$7::int[],$8::int[],$9::int[],$10::int[],$11::text[]) ON CONFLICT DO NOTHING`,
-   [userId,col('type'),col('posted_at'),col('likes'),col('comments'),col('saves'),col('shares'),col('reach'),col('impressions'),col('watch_s'),col('caption')]);imported+=r.rowCount}
- const res={imported,duplicates:ok.length-imported,invalid:invalid.length,invalidSample:invalid.slice(0,5),source};
+   SELECT $1,* FROM unnest($2::text[],$3::timestamptz[],$4::int[],$5::int[],$6::int[],$7::int[],$8::int[],$9::int[],$10::int[],$11::text[]) ${update?UPSERT_UPDATE+' RETURNING (xmax=0) AS inserted':'ON CONFLICT DO NOTHING'}`,
+   [userId,col('type'),col('posted_at'),col('likes'),col('comments'),col('saves'),col('shares'),col('reach'),col('impressions'),col('watch_s'),col('caption')]);
+  if(update){const n=r.rows.filter(x=>x.inserted).length;imported+=n;updated+=r.rows.length-n}else imported+=r.rowCount}
+ const res={imported,updated,duplicates:valid.length-imported,invalid:invalid.length,invalidSample:invalid.slice(0,5),source,mode:update?'update':'skip'};
  await q('INSERT INTO import_log(user_id,source,imported,duplicates,invalid) VALUES($1,$2,$3,$4,$5)',[userId,source,imported,res.duplicates,res.invalid]);
  return res}
 /* ---- 0.5 generateImage: runs off the request path; GET /api/content/image/:jobId reads the result ---- */
@@ -47,6 +55,7 @@ export function startWorker(){
  const wi=new Worker('import',j=>processImport(j.data),{connection:redis,concurrency:2});wi.on('failed',(j,e)=>console.error('import failed',e.message));
  const wg=new Worker('image',j=>processImage(j.data),{connection:redis,concurrency:2});wg.on('failed',(j,e)=>console.error('image failed',e.message));
  setInterval(()=>q('DELETE FROM competitor_posts WHERE expires_at<now()').catch(()=>{}),36e5); // 30-day retention
+ startSnapshots(q); // 2.1: daily post snapshots + per-user baseline
  return w;}
 if(process.argv[1].endsWith('worker.js')){validateEnv();startWorker()}
 /* ---- publisher: runs every 30s, publishes due posts ---- */

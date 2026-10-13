@@ -1,37 +1,53 @@
 # GrowthEngine AI — AI Progress Ledger
 Last checked: 2026-10-13 (UTC)
-Repository revision: base efc8883 (main) + Phase 0 changes (branch phase-0 / phase-0.diff)
-Current phase/item: Phase 0 complete pending user confirmation. Next: Phase 1 only after the gate.
-Overall state: PHASE 0 AWAITING CONFIRMATION
+Repository revision: user reports 934fe47 (the Phase 0 commit, pushed to origin/main). I only ever saw a GitHub "Download ZIP" of main (no .git) and could not confirm its hash. Patches are built against that zip: `phase-0-fix.diff`, then `phase-1.diff` on top of it.
+Current phase/item: Phase 1 + 2.1 written; NOT verified against a running stack
+Overall state: PHASE 1 IMPLEMENTED — UNVERIFIED. Phase 1 gate NOT passed.
 
 ## Phase gates
-- [ ] Phase 0 verified; report delivered; user confirmation received before Phase 1   <- report delivered, WAITING for confirmation
-- [ ] Phase 1 verified; user confirmation received before Phase 2
+- [x] Phase 0: GATE CONFIRMED by the user on 2026-10-13, with local evidence (Windows 11, Postgres 18, Memurai, Node 24.19.0): npm test 17/17, migrate, seed, /ready ok, login and /import/status valid JSON, frontend renders the Settings Import card. Not covered by that evidence: CSV upload from the UI, real provider calls, the 0.3 limit runs, Graph API import. All six defaults accepted.
+- [ ] Phase 1 verified; user confirmation received before Phase 2   <- code written, needs `scripts/smoke-phase1.sh` + a browser check
 - [ ] Phase 2 verified; user confirmation received before Phase 3
 - [ ] Phase 3 verified; user confirmation received before Phase 4
 - [ ] Phase 4 verified
 
+## Discrepancies found when reconciling the repo with the previous ledger
+- `growthengine-api.zip` and a stray file `tatus` (a pasted `git diff --stat` output) were still in main. 0.6 claimed the zip was untracked. Both are deleted in this session's diff; run `git rm --cached` if your index still has them.
+- Previous ledger said "4 open decisions"; the PDF report lists 6. Decisions log now covers all 6.
+- Bug found: reel share never matched ('reel' vs stored 'REEL'). Fixed (decision 10).
+
+- User-reported defect 1: `.env` was not loaded by plain `node src/server.js` (README line 9 implied it was; scripts relied on `--env-file`). Fixed in phase-0-fix.diff (src/loadenv.js, first import of every entry point).
+- User asked whether the reel-case bug was fixed in Phase 0: NO. 934fe47 still has `t.type === 'reel'` in financePlan. It is fixed only in phase-1.diff (`needWeights`, case-insensitive).
+
 ## Item ledger
 | ID | Status | Code evidence | Verification evidence | Blocker / next action |
 |---|---|---|---|---|
-| 0.1 | VERIFIED (API); UI IMPLEMENTED — UNVERIFIED | schema.sql posts_dedupe + import_log; routes.js /import/*; worker.js processImport; importer.js, csv.js; Settings.tsx card | curl: CSV import imported 3 / invalid 1; same CSV again duplicates 3; JSON 1 new + 1 dup; /posts shows rows; /import/status count 4; other user gets 404 on the job and sees none of the seeded rows | Graph API path untested (needs IG token); Settings card not rendered in a browser |
-| 0.2 | VERIFIED | config.js; auth.js, crypto.js no fallbacks; server/migrate/seed/worker call validateEnv | missing/malformed ENCRYPTION_KEY and short JWT_SECRET each exit 1 with a clear message; valid env boots; config.test.js | none |
-| 0.3 | VERIFIED (assistant + login); other buckets share the same code | ratelimit.js; routes.js limit() on assistant/image/captions-hashtags/import | assistant: 30x200 then 429 + Retry-After 3600; second user unaffected; login: 10x401 then 429 (also with the correct password), different email unaffected | image 20/h and captions 60/h buckets not exercised to the limit; monthly quotas deferred (optional in plan) |
-| 0.4 | IMPLEMENTED — UNVERIFIED (provider call) | keys.js getUserKey/keyFor/llmConfig; images.js, assistant.js, routes.js use it | script: stored key beats env, env is fallback, stored openai key selects api.openai.com; image job accepted with only a stored key; unreadable key row no longer breaks GET /settings/keys | no live call to OpenAI/Replicate with a user key (no provider network here) |
-| 0.5 | VERIFIED (API, mocked Replicate); UI IMPLEMENTED — UNVERIFIED | worker.js processImage; routes.js POST/GET /content/image; Content.tsx polling | POST returned {jobId} in 16 ms; states pending (also with worker stopped), done (1080x1350 PNG with overlay), failed; other user 404 | real Replicate untested; assistant-initiated images are still synchronous (see 0.7) |
-| 0.6 | IMPLEMENTED — UNVERIFIED (Windows) | zip git rm + *.zip in .gitignore; README rewritten; .env.example, render.yaml | git status shows zip deleted | Windows steps not run on Windows; zip still exists in git history (contains no secrets) |
-| 0.7 (new) | VERIFIED | /ready, CORS prod default, GDPR export completeness, 3 indexes, variadic route helpers, auth body validation, scripts/smoke-*.sh | smoke-regression.sh all expected codes; export has api_keys names only | none |
-| 1.1 - 4.2 (all 13 items) | NOT STARTED | | | wait for gate |
+| 0.1 | VERIFIED (API, previous session); UI card renders (user, 2026-10-13); UI upload not exercised | unchanged except 0.1b below | previous curl evidence + user: /import/status valid JSON, Settings card renders | Graph API path and an actual upload from the UI untested |
+| 0.1b | IMPLEMENTED — UNVERIFIED | worker.js processImport (update mode, `xmax=0` insert/update split), importer.js dedupeRows, routes.js `?update=1`/`updateExisting`, Settings.tsx checkbox | `dedupeRows` unit tests pass. The SQL (`ON CONFLICT (user_id,posted_at,type,md5(...)) DO UPDATE ... WHERE ... IS DISTINCT FROM`) has NOT been run against Postgres | run the 0.1b block of scripts/smoke-phase1.sh |
+| 0.2 | VERIFIED (boot checks; user ran migrate, seed, /ready). `.env` loading: IMPLEMENTED — UNVERIFIED on Windows | loadenv.js imported first by server/worker/migrate/seed/config | test/loadenv.test.js passes on Linux Node 22 (CRLF .env, real env wins, missing .env ok) | user: run plain `node src/server.js` with only a .env file |
+| 0.3 | VERIFIED (assistant + login) | unchanged | previous session | image/captions buckets not driven to limit; monthly quotas deferred |
+| 0.4 | IMPLEMENTED — UNVERIFIED (provider call) | unchanged | | test with a real user key |
+| 0.5 | VERIFIED (API, mock); UI IMPLEMENTED — UNVERIFIED | routes.js now calls `enqueueImage` (imagejobs.js) | previous session's evidence predates this refactor; re-run | re-check POST /content/image after the refactor |
+| 0.6 | IMPLEMENTED — UNVERIFIED (Windows) | zip + `tatus` removed in working tree | | `git rm --cached growthengine-api.zip tatus`; run Windows steps once |
+| 0.7 | VERIFIED (previous session) | GDPR export now also lists post_snapshots and metrics_baseline | export change not run | run smoke-regression.sh |
+| 0.8 | IMPLEMENTED — UNVERIFIED | assistant.js image branch -> `enqueueImage`; imagejobs.js; Assistant.tsx polls /content/image/:jobId (2s, 60s, cancels when a newer request replaces the card) | none beyond syntax/type check | run smoke-phase1.sh last block; try with a Replicate key or the mock |
+| 1.1 | IMPLEMENTED — UNVERIFIED | advisor.advise (+why/watch), insights.js `priorities`, GET /api/priorities, DashboardCards.tsx `Priorities` on Dashboard above the KPI grid | unit tests; handler test with fake deps | smoke-phase1.sh; look at the card in a browser |
+| 1.2 | IMPLEMENTED — UNVERIFIED | advisor.contextGaps, insights.js `aiContext`, GET /api/ai/context, `AIContext` card (health ring, sources table, gaps). Includes imports as a source and flags seeded demo data | unit tests; handler test with fake deps. SQL not run | smoke-phase1.sh |
+| 1.3 | IMPLEMENTED — UNVERIFIED | App.tsx PAGES key and icons.tsx key renamed to "Statistics"; README updated | tsc clean against loose stubs | click through the drawer in a browser |
+| 1.4 | IMPLEMENTED — UNVERIFIED | advisor.needWeights (shared with financePlan), marketingBreakdown, GET /api/marketing/breakdown, Statistics card labelled as estimates | unit tests (shares ~100, low confidence carries "correlation, not causation") | smoke-phase1.sh; browser |
+| 2.1 | IMPLEMENTED — UNVERIFIED | schema.sql post_snapshots (+ unique per post per UTC day), metrics_baseline; snapshots.js; worker.js `startSnapshots` (5s after boot, then hourly) | runSnapshots unit test with fake q. SQL not run; no worker run | `npm run migrate`, start worker, query tables, restart and confirm no duplicates |
+| 2.2 - 4.2 (10 items) | NOT STARTED | | | wait for gates |
 
 ## Latest checkpoint
-- Completed this session: Phase 0 items 0.1 - 0.6 plus new item 0.7
-- Files changed: see PDF report / phase-0.diff (new: config.js, csv.js, importer.js, keys.js, ratelimit.js, 2 tests, 2 smoke scripts, docs/; changed: auth, crypto, images, assistant, routes, worker, queue, server, migrate, seed, schema.sql, README, .env.example, render.yaml, package.json, api.ts, Content.tsx, Settings.tsx; deleted from git: growthengine-api.zip)
-- Commands/tests and results: `npm test` 17/17 pass; `cd web && npm run build` passes; migrate run twice OK (idempotent); endpoint checks as above
-- Endpoints checked: /import/posts, /import/status, /import/jobs/:id, /content/image (POST/GET), /settings/keys, /assistant, /auth/login, /ready, plus regression set
-- Unverified behavior / regressions: no regressions found. Untested: browser rendering of UI changes, Graph API import, real Replicate/OpenAI calls, Windows setup
-- User decisions / approvals: none recorded yet (see AI_DECISIONS.md for decisions awaiting confirmation)
-- Exact next action: user confirms Phase 0 (and answers the 4 open decisions); then start Phase 1 and pull forward 2.1 (snapshots) so Phase 3 has its 3 days of history
-- Stop at phase gate: YES
+- Completed this session: reconciled repo vs ledger; 0.1b, 0.8, Phase 1 (1.1-1.4), 2.1 written; one bug fixed (reel casing)
+- Files changed: NEW src/imagejobs.js, src/insights.js, src/snapshots.js, test/phase1.test.js, scripts/smoke-phase1.sh, web/src/pages/DashboardCards.tsx; CHANGED src/advisor.js, assistant.js, importer.js, routes.js, worker.js, db/schema.sql, package.json, README.md, docs/*, web/src/App.tsx, icons.tsx, Assistant.tsx, pages/Dashboard.tsx, Analytics.tsx, Settings.tsx, styles.css; DELETED growthengine-api.zip, tatus
+- Commands/tests and results: `npm test` 29/29 pass (17 earlier + 10 Phase 1 + 2 loadenv); `node --check` on all src files passes; `tsc --noEmit` on web/ against loose `any` stubs reports only the unrelated `./styles.css` import (same as before the changes)
+- NOT run (no network, so no npm install, Postgres or Redis in the working environment): the API, `npm run migrate`, any SQL, `vite build`, any browser rendering, the smoke scripts
+- Endpoints checked: none against a live server
+- Unverified behavior / regressions: everything marked UNVERIFIED above. No regression run of the existing tabs
+- User decisions / approvals: see AI_DECISIONS.md ("implement the next step" taken as acceptance of defaults)
+- Exact next action: apply phase-1.diff, `npm run migrate`, `npm test`, `cd web && npm run build`, start with INLINE_WORKER=1, run `bash scripts/smoke-phase1.sh` and `bash scripts/smoke-regression.sh`, open Dashboard + Statistics + Settings in a browser, then report results so items can be marked VERIFIED
+- Stop at phase gate: YES (do not start 2.2/2.3 or Phase 3 until Phase 1 is verified and confirmed)
 
 ## Rules
 - Repository + fresh evidence outrank this ledger.

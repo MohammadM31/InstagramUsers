@@ -1,4 +1,4 @@
-import {assistant,financeRoute} from './assistant.js';
+import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {enqueueImage} from './imagejobs.js';
 import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ,importQ,imageQ} from './queue.js';import {limit} from './ratelimit.js';import {llmConfig,keyFor} from './keys.js';import {parseCsv} from './csv.js';import {MAX_ROWS} from './importer.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';
 export const api=Router();api.use(requireAuth);
 const wrap=f=>(req,res,next)=>Promise.resolve(f(req,res,next)).catch(next); // Express 4 needs this for async errors
@@ -31,9 +31,8 @@ post('/content/hashtags',text,async(req,res)=>res.json(await llm(req.uid,'Return
 /* 0.5 async image generation: POST returns {jobId}; the worker does the slow part */
 post('/content/image',limit('image',20,3600),async(req,res)=>{const b=req.body||{},prompt=String(b.prompt||'').trim().slice(0,1000);
  if(!prompt)return res.status(400).json({error:'prompt required'});
- if(!await keyFor(req.uid,'replicate',process.env.REPLICATE_API_TOKEN||process.env.REPLICATE_API_KEY))return res.status(503).json({error:'No Replicate key: add one in Settings or set REPLICATE_API_TOKEN'});
  const params={prompt,ratio:b.ratio,model:b.model,overlayText:b.overlayText?String(b.overlayText).slice(0,120):undefined,color:b.color,n:Math.min(Number(b.n)||1,2),referenceImage:b.referenceImage};
- const j=await imageQ.add('generate',{userId:req.uid,params});res.status(202).json({jobId:j.id})});
+ const jobId=await enqueueImage(req.uid,params);res.status(202).json({jobId})}); // 503 if no Replicate key (see imagejobs.js)
 get('/content/image/:jobId',async(req,res)=>{const j=await imageQ.getJob(req.params.jobId);if(!j||j.data.userId!==req.uid)return res.sendStatus(404);
  const st=await j.getState();if(st==='completed')return res.json({status:'done',images:j.returnvalue.images});
  if(st==='failed'){let r=j.failedReason;if(!r){await new Promise(x=>setTimeout(x,150));r=(await imageQ.getJob(req.params.jobId))?.failedReason} // BullMQ can flip state before the reason is written
@@ -52,7 +51,8 @@ post('/import/posts',limit('import',20,3600),async(req,res)=>{const b=req.body;l
  else return res.status(400).json({error:'send a JSON array, {posts:[...]}, CSV text (Content-Type: text/csv), or {source:"instagram"}'});
  if(rows.length>MAX_ROWS)return res.status(413).json({error:`too many rows (max ${MAX_ROWS})`});
  if(!rows.length&&source!=='instagram')return res.status(400).json({error:'no rows found'});
- const j=await importQ.add('import',{userId:req.uid,rows,source});
+ const update=req.query.update==='1'||b?.updateExisting===true; // 0.1b opt-in: refresh metrics of posts that already exist
+ const j=await importQ.add('import',{userId:req.uid,rows,source,update});
  for(let i=0;i<40;i++){const x=await importQ.getJob(j.id),st=await x.getState(); // wait up to ~10s so small imports answer with counts
   if(st==='completed')return res.json({jobId:j.id,status:'done',...x.returnvalue});if(st==='failed')return res.status(422).json({jobId:j.id,status:'failed',error:x.failedReason});await new Promise(r=>setTimeout(r,250))}
  res.status(202).json({jobId:j.id,status:'pending'})});
@@ -61,7 +61,8 @@ get('/import/jobs/:id',async(req,res)=>{const j=await importQ.getJob(req.params.
 get('/import/status',async(req,res)=>{const[c]=await q('SELECT count(*)::int count FROM posts WHERE user_id=$1',[req.uid]),[l]=await q('SELECT source,at,imported,duplicates FROM import_log WHERE user_id=$1 ORDER BY at DESC LIMIT 1',[req.uid]);
  res.json({count:c.count,lastImportAt:l?.at||null,source:l?.source||null,lastResult:l?{imported:l.imported,duplicates:l.duplicates}:null})});
 get('/gdpr/export',async(req,res)=>{const o={};for(const t of['posts','competitors','scrape_audit','hashtag_sets','import_log'])o[t]=await q(`SELECT * FROM ${t} WHERE user_id=$1`,[req.uid]);
- o.scheduled_posts=await q('SELECT id,caption,platforms,scheduled_at,status,error,published_at FROM scheduled_posts WHERE user_id=$1',[req.uid]);o.api_keys=await q('SELECT name FROM api_keys WHERE user_id=$1',[req.uid]);res.json(o)});
+ o.scheduled_posts=await q('SELECT id,caption,platforms,scheduled_at,status,error,published_at FROM scheduled_posts WHERE user_id=$1',[req.uid]);o.api_keys=await q('SELECT name FROM api_keys WHERE user_id=$1',[req.uid]);
+ o.post_snapshots=await q('SELECT s.* FROM post_snapshots s JOIN posts p ON p.id=s.post_id WHERE p.user_id=$1 ORDER BY s.post_id,s.captured_at',[req.uid]);o.metrics_baseline=await q('SELECT * FROM metrics_baseline WHERE user_id=$1',[req.uid]);res.json(o)});
 del('/gdpr/account',async(req,res)=>{await q('DELETE FROM users WHERE id=$1',[req.uid]);res.json({deleted:true})});
 /* analytics */
 const patch=(p,...f)=>api.patch(p,...hs(f));
@@ -87,3 +88,5 @@ patch('/schedule/:id',async(req,res)=>{await q(`UPDATE scheduled_posts SET statu
 del('/schedule/:id',async(req,res)=>{await q('DELETE FROM scheduled_posts WHERE id=$1 AND user_id=$2',[req.params.id,req.uid]);res.json({ok:true})});
 /* assistant + finance */
 post('/assistant',limit('assistant',30,3600),assistant);get('/finance/plan',financeRoute);
+/* Phase 1: priorities (1.1), AI context (1.2), marketing breakdown (1.4). Handlers live in insights.js */
+const ins=makeInsights({q,pageMetrics});get('/priorities',ins.priorities);get('/ai/context',ins.aiContext);get('/marketing/breakdown',ins.marketing);

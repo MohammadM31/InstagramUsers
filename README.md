@@ -3,7 +3,7 @@ Instagram growth tool: Express + PostgreSQL + Redis/BullMQ API with a React + Ty
 
 **Features:** JWT auth (ToS-gated signup, login lockout), dashboard KPIs, post import (CSV/JSON/Instagram), competitor tracking (queued, audit-logged, 1h cache, 200/hr, 30-day retention), one-shot AI assistant (analytics, finance split, tips, images), AI captions/hashtags, async image generation (Replicate + sharp text overlay), scheduling + publisher, Finance & Capital planner, encrypted per-user API keys (actually used), GDPR export/delete.
 
-**Pages:** Dashboard, My Account (post table, ER heatmap, type chart), Competitors, Content AI, Scheduling, Finance & Capital, Settings (post import, API keys, privacy), Roadmap.
+**Pages:** Dashboard, Statistics (post table, ER heatmap, type chart), Competitors, Content AI, Scheduling, Finance & Capital, Settings (post import, API keys, privacy), Roadmap.
 
 ## Required configuration
 The API **exits at boot** with a clear message if these are missing or malformed: `JWT_SECRET` (32+ chars), `ENCRYPTION_KEY` (exactly 64 hex chars), `DATABASE_URL`. Copy `.env.example` to `.env` and fill them in.
@@ -24,7 +24,7 @@ The API **exits at boot** with a clear message if these are missing or malformed
 6. Frontend: `cd web`, `npm install`, `npm run dev` (http://localhost:5173, proxies `/api` to :3000).
 
 ## Tests
-    npm test            # unit tests (crypto, advisor, config, importer)
+    npm test            # unit tests (crypto, advisor, config, importer, phase 1 logic)
     cd web && npm run build
 
 ## API quick tour
@@ -33,12 +33,20 @@ The API **exits at boot** with a clear message if these are missing or malformed
     # import your own posts (duplicates are skipped; response shows imported / duplicates / invalid)
     curl -H "Authorization: Bearer $TOKEN" -H 'content-type: text/csv' --data-binary @posts.csv localhost:3000/api/import/posts
     curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/import/status
-    # images are queued: POST returns {jobId}; poll until status is done/failed
+    # newer export of posts you already imported? add ?update=1 to refresh their likes/reach/etc. (response adds "updated")
+    curl -H "Authorization: Bearer $TOKEN" -H 'content-type: text/csv' --data-binary @posts.csv 'localhost:3000/api/import/posts?update=1'
+    # Phase 1: ranked tips with why + metric to watch, what the AI knows (and lacks), marketing methods (estimates)
+    curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/priorities
+    curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/ai/context
+    curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/marketing/breakdown
+    # images are queued (Content AI and the assistant alike): POST returns {jobId}; poll until status is done/failed
     curl -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"prompt":"coffee cup on marble","ratio":"4:5","overlayText":"New Menu"}' localhost:3000/api/content/image
     curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/content/image/<jobId>
 `GET /health` is liveness; `GET /ready` also checks Postgres and Redis.
 
 CSV columns (case-insensitive, common aliases accepted): `date`, `type` (reel / carousel / image), `likes`, `comments`, `saves`, `shares`, `reach` (required), `impressions`, `watch_s`, `caption`.
+
+Daily post snapshots (`post_snapshots`) and a per-user `metrics_baseline` are written by the worker (`INLINE_WORKER=1` or `npm run worker`). History only accumulates while a worker is running. Run `npm run migrate` after pulling: it adds both tables.
 
 ## Limits (per user, Redis)
 Assistant 30/h · images 20/h (assistant images count too) · captions + hashtags 60/h combined · import 20/h · login: 10 failures per email+IP locks that pair for 15 min. Over the limit returns `429` with `Retry-After`.

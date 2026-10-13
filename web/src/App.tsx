@@ -1,7 +1,7 @@
 import {useState,useEffect} from 'react';import type {ComponentType} from 'react';import {tok} from './api';
 import Login from './pages/Login';import Dashboard from './pages/Dashboard';import Analytics from './pages/Analytics';import Competitors from './pages/Competitors';import Content from './pages/Content';import Schedule from './pages/Schedule';import Settings from './pages/Settings';import Roadmap from './pages/Roadmap';import Finance from './pages/Finance';
 import Assistant from './Assistant';import {ICONS} from './icons';
-const PAGES:Record<string,ComponentType>={Dashboard,'My Account':Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,'Finance & Capital':Finance,Settings,Roadmap};
+const PAGES:Record<string,ComponentType>={Dashboard,Statistics:Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,'Finance & Capital':Finance,Settings,Roadmap};
 export default function App(){const[t,setT]=useState(tok()),[p,setP]=useState('Dashboard'),[open,setOpen]=useState(false),[dk,setDk]=useState(()=>localStorage.getItem('theme')?localStorage.getItem('theme')==='dark':matchMedia('(prefers-color-scheme:dark)').matches);
  useEffect(()=>{document.documentElement.dataset.theme=dk?'dark':'light';localStorage.setItem('theme',dk?'dark':'light')},[dk]);
  useEffect(()=>{const k=(e:KeyboardEvent)=>e.key==='Escape'&&setOpen(false);addEventListener('keydown',k);return()=>removeEventListener('keydown',k)},[]);

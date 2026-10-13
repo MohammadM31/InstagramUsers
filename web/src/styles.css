@@ -42,3 +42,6 @@ input,select,textarea{background:var(--soft);color:var(--tx);border:1px solid va
 .chips button{background:var(--soft);border:1px solid var(--bd);color:var(--tx);border-radius:99px;padding:5px 12px;font:12px var(--font);cursor:pointer}.chips button:hover{border-color:var(--ac)}
 .composer form button.on{color:var(--up)}.composer form button svg{width:20px;height:20px}
 a.btn{text-decoration:none;display:inline-block}
+/* Phase 1: Today's Priorities */
+.prio{padding:10px 0;border-bottom:1px solid var(--bd)}.prio:last-child{border-bottom:0}
+.pi{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:50%;background:var(--soft);color:var(--ac)}.pi svg{width:16px;height:16px}
