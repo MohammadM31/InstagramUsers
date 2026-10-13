@@ -1,7 +1,7 @@
 import {useEffect,useState,useCallback} from 'react';
 export const tok=()=>localStorage.getItem('t')||'';
-export async function api<T=any>(p:string,o:{method?:string;body?:any}={}):Promise<T>{
- const r=await fetch('/api'+p,{method:o.method||'GET',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok()},body:o.body?JSON.stringify(o.body):undefined});
+export async function api<T=any>(p:string,o:{method?:string;body?:any;raw?:string;ct?:string}={}):Promise<T>{
+ const r=await fetch('/api'+p,{method:o.method||'GET',headers:{'Content-Type':o.ct||'application/json',Authorization:'Bearer '+tok()},body:o.raw!==undefined?o.raw:o.body?JSON.stringify(o.body):undefined});
  const j=await r.json().catch(()=>({}));
  if(r.status===401&&!p.startsWith('/auth')){localStorage.removeItem('t');location.reload()}
  if(!r.ok)throw new Error(j.error||r.statusText);return j}

@@ -7,7 +7,8 @@ services:
       - {key: REDIS_URL, fromService: {type: keyvalue, name: ge-redis, property: connectionString}}
       - {key: INLINE_WORKER, value: "1"}
       - {key: JWT_SECRET, generateValue: true}
-      - {key: ENCRYPTION_KEY, sync: false}
+      - {key: ENCRYPTION_KEY, sync: false}   # REQUIRED: 64 hex chars. The API will not boot without it.
+      - {key: NODE_ENV, value: production}
       - {key: LLM_API_KEY, sync: false}
       - {key: LLM_BASE_URL, sync: false}
       - {key: REPLICATE_API_TOKEN, sync: false}

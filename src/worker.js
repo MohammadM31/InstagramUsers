@@ -1,4 +1,4 @@
-import {Worker} from 'bullmq';import {redis,cached} from './cache.js';import {q} from './db.js';
+import {Worker} from 'bullmq';import {redis,cached} from './cache.js';import {q,db} from './db.js';import {generateImage} from './images.js';import {normalizePosts} from './importer.js';import {keyFor} from './keys.js';import {validateEnv} from './config.js';
 const DISCLAIMER='Public data only. User confirmed ToS at signup; scrape logged for audit.';
 async function fetchProfile(handle){
  const {IG_ACCESS_TOKEN:t,IG_USER_ID:id}=process.env;
@@ -17,12 +17,37 @@ export async function processScrape({userId,competitorId,handle}){
  await q('DELETE FROM competitor_posts WHERE competitor_id=$1',[competitorId]);
  for(const p of d.posts)await q(`INSERT INTO competitor_posts(competitor_id,type,posted_at,likes,comments,caption,expires_at) VALUES($1,$2,$3,$4,$5,$6,now()+interval '30 days')`,[competitorId,p.type,p.at,p.likes,p.comments,p.caption]);
  return d.source;}
+/* ---- 0.1 importPosts: bulk insert scoped to the job's user, duplicates skipped by the posts_dedupe unique index ---- */
+async function igOwnPosts(uid){ // optional Graph API path; needs IG_ACCESS_TOKEN + IG_USER_ID (or the user's stored 'instagram' key)
+ const t=await keyFor(uid,'instagram',process.env.IG_ACCESS_TOKEN),id=process.env.IG_USER_ID;
+ if(!t||!id)throw new Error('Instagram import needs IG_USER_ID and an access token');
+ const g=async u=>{const j=await(await fetch(u)).json();if(j.error)throw new Error(j.error.message);return j};
+ const l=await g(`https://graph.facebook.com/v21.0/${id}/media?fields=id,timestamp,media_type,like_count,comments_count,caption&limit=50&access_token=${t}`);
+ const out=[];
+ for(const m of l.data||[]){let ins={};try{const r=await g(`https://graph.facebook.com/v21.0/${m.id}/insights?metric=reach,saved,shares&access_token=${t}`);ins=Object.fromEntries((r.data||[]).map(x=>[x.name,x.values?.[0]?.value]))}catch{} // insights are best-effort (not available for every media type)
+  out.push({posted_at:m.timestamp,type:m.media_type==='VIDEO'?'REEL':m.media_type,likes:m.like_count,comments:m.comments_count,saves:ins.saved,shares:ins.shares,reach:ins.reach,caption:m.caption||''})}
+ return out}
+export async function processImport({userId,rows,source}){
+ let input=rows;if(source==='instagram')input=await igOwnPosts(userId);
+ const{rows:ok,invalid}=normalizePosts(input);let imported=0;
+ for(let i=0;i<ok.length;i+=500){const c=ok.slice(i,i+500),col=k=>c.map(r=>r[k]);
+  const r=await db.query(`INSERT INTO posts(user_id,type,posted_at,likes,comments,saves,shares,reach,impressions,watch_s,caption)
+   SELECT $1,* FROM unnest($2::text[],$3::timestamptz[],$4::int[],$5::int[],$6::int[],$7::int[],$8::int[],$9::int[],$10::int[],$11::text[]) ON CONFLICT DO NOTHING`,
+   [userId,col('type'),col('posted_at'),col('likes'),col('comments'),col('saves'),col('shares'),col('reach'),col('impressions'),col('watch_s'),col('caption')]);imported+=r.rowCount}
+ const res={imported,duplicates:ok.length-imported,invalid:invalid.length,invalidSample:invalid.slice(0,5),source};
+ await q('INSERT INTO import_log(user_id,source,imported,duplicates,invalid) VALUES($1,$2,$3,$4,$5)',[userId,source,imported,res.duplicates,res.invalid]);
+ return res}
+/* ---- 0.5 generateImage: runs off the request path; GET /api/content/image/:jobId reads the result ---- */
+// SWAP POINT: results are base64 data URIs stored in the job's return value (1h TTL). Replace with an S3/CDN upload and return a URL here.
+export async function processImage({userId,params}){return{images:await generateImage({...params,uid:userId})}}
 export function startWorker(){
  const w=new Worker('scrape',j=>processScrape(j.data),{connection:redis,concurrency:2,limiter:{max:200,duration:3600000}}); // 200 calls/hr
  w.on('failed',(j,e)=>console.error('scrape failed',j?.data?.handle,e.message));
+ const wi=new Worker('import',j=>processImport(j.data),{connection:redis,concurrency:2});wi.on('failed',(j,e)=>console.error('import failed',e.message));
+ const wg=new Worker('image',j=>processImage(j.data),{connection:redis,concurrency:2});wg.on('failed',(j,e)=>console.error('image failed',e.message));
  setInterval(()=>q('DELETE FROM competitor_posts WHERE expires_at<now()').catch(()=>{}),36e5); // 30-day retention
  return w;}
-if(process.argv[1].endsWith('worker.js'))startWorker();
+if(process.argv[1].endsWith('worker.js')){validateEnv();startWorker()}
 /* ---- publisher: runs every 30s, publishes due posts ---- */
 async function publish(p){
  const {IG_ACCESS_TOKEN:t,IG_USER_ID:id}=process.env;

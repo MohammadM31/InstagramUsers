@@ -1,3 +1,4 @@
+import {validateEnv} from './config.js';validateEnv({needDb:true});
 import bcrypt from 'bcryptjs';import {db,q} from './db.js';
 const[u]=await q(`INSERT INTO users(email,pass_hash,tos_accepted_at) VALUES('demo@growthengine.ai',$1,now()) ON CONFLICT(email) DO UPDATE SET email=EXCLUDED.email RETURNING id`,[await bcrypt.hash('demo1234',10)]);
 await q('DELETE FROM posts WHERE user_id=$1',[u.id]);const T=['REEL','CAROUSEL_ALBUM','IMAGE'];

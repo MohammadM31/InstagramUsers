@@ -2,6 +2,8 @@
 import { q } from './db.js';
 import { generateImage } from './images.js'; // the ProductAI-style image service already lives here
 import { advise, health, financePlan } from './advisor.js';
+import { llmConfig } from './keys.js';
+import { hit } from './ratelimit.js';
 
 const ER = '(likes+comments+saves+shares)';
 const L30 = "posted_at>now()-interval '30 days'";
@@ -40,12 +42,12 @@ const amount = t => Number(t.match(/\$?\s?(\d[\d,]*)/)?.[1]?.replace(/,/g, '')) 
 
 // Intent router. With LLM_API_KEY set (Gemini, DeepSeek or OpenAI via an OpenAI-compatible endpoint) the model sees the
 // page's live metrics and picks ONE action plus a short reply. Without a key, or on any failure, regex rules decide.
-async function route(text, m, tips) {
-  const key = process.env.LLM_API_KEY;
-  if (key) try {
-    const r = await fetch((process.env.LLM_BASE_URL || 'https://api.openai.com/v1') + '/chat/completions', {
-      method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(10000),
-      body: JSON.stringify({ model: process.env.LLM_MODEL || 'gpt-4o-mini', response_format: { type: 'json_object' }, messages: [
+async function route(text, m, tips, uid) {
+  const cfg = await llmConfig(uid); // 0.4: user's stored key first, env fallback
+  if (cfg) try {
+    const r = await fetch(cfg.base + '/chat/completions', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + cfg.key, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(10000),
+      body: JSON.stringify({ model: cfg.model, response_format: { type: 'json_object' }, messages: [
         { role: 'system', content: `You are the assistant inside an Instagram growth tool. You know this page's live state:\n${JSON.stringify({ metrics: m, health: health(m), priorities: tips.slice(0, 4).map(t => t.text) })}\n` +
           `Pick ONE action for the user's request. Return JSON {"intent":"image|analytics|finance|tip|info","text":"","imagePrompt":"","capital":0}. ` +
           `"text" is at most 20 words, plain and brief, no greeting. Use intent "image" only if they want a picture made (put the visual in imagePrompt). "analytics" for performance/progress/page info, "finance" for budget or capital (put the amount in capital), "tip" for what to do next. ` +
@@ -66,12 +68,14 @@ export async function assistant(req, res) {
   if (!text.trim()) return res.status(400).json({ error: 'message required' });
   const m = await pageMetrics(req.uid);
   const tips = advise(m);
-  const o = await route(text, m, tips);
+  const o = await route(text, m, tips, req.uid);
   const say = (fallback) => (o.text && String(o.text).slice(0, 200)) || fallback;
 
   if (o.intent === 'image') {
     try {
-      const [url] = await generateImage({ prompt: o.imagePrompt || imagePrompt(text), ratio: req.body.ratio || '4:5', overlayText: req.body.overlayText, referenceImage: req.body.referenceImage });
+      const rl = await hit('image', req.uid, 20, 3600); // assistant images spend from the same budget as Content AI
+      if (!rl.ok) return res.status(429).json({ error: rl.msg });
+      const [url] = await generateImage({ prompt: o.imagePrompt || imagePrompt(text), ratio: req.body.ratio || '4:5', overlayText: req.body.overlayText, referenceImage: req.body.referenceImage, uid: req.uid });
       return res.json({ type: 'image', text: 'Here you go.', data: { url } });
     } catch (e) {
       return res.json({ type: 'info', text: e.status === 503 ? 'Image generation needs REPLICATE_API_TOKEN in .env.' : 'Image generation failed. Try again.', data: {} });
