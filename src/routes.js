@@ -1,4 +1,4 @@
-import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {enqueueImage} from './imagejobs.js';
+import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';
 import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ,importQ,imageQ} from './queue.js';import {limit} from './ratelimit.js';import {llmConfig,keyFor} from './keys.js';import {parseCsv} from './csv.js';import {MAX_ROWS} from './importer.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';
 export const api=Router();api.use(requireAuth);
 const wrap=f=>(req,res,next)=>Promise.resolve(f(req,res,next)).catch(next); // Express 4 needs this for async errors
@@ -29,7 +29,8 @@ post('/content/captions',text,async(req,res)=>{const{topic,tone='professional',g
  res.json(await llm(req.uid,'You write Instagram captions. Return JSON {"variants":[{"hook":"","body":"","cta":""}]} with exactly 5 variants.',`Topic: ${topic}\nTone: ${tone}\nGoal: ${goal}\nEmoji level: ${emoji}`))});
 post('/content/hashtags',text,async(req,res)=>res.json(await llm(req.uid,'Return JSON {"high":[],"mid":[],"niche":[],"branded":[]} totalling 30 Instagram hashtags.',`Niche: ${req.body?.niche}`)));
 /* 0.5 async image generation: POST returns {jobId}; the worker does the slow part */
-post('/content/image',limit('image',20,3600),async(req,res)=>{const b=req.body||{},prompt=String(b.prompt||'').trim().slice(0,1000);
+const needKey=async(req,res,next)=>{try{if(!await hasReplicateKey(req.uid))return res.status(503).json({error:'No Replicate key: add one in Settings or set REPLICATE_API_TOKEN'});next()}catch(e){next(e)}}; // runs BEFORE the limiter so a 503 does not spend the image budget
+post('/content/image',needKey,limit('image',20,3600),async(req,res)=>{const b=req.body||{},prompt=String(b.prompt||'').trim().slice(0,1000);
  if(!prompt)return res.status(400).json({error:'prompt required'});
  const params={prompt,ratio:b.ratio,model:b.model,overlayText:b.overlayText?String(b.overlayText).slice(0,120):undefined,color:b.color,n:Math.min(Number(b.n)||1,2),referenceImage:b.referenceImage};
  const jobId=await enqueueImage(req.uid,params);res.status(202).json({jobId})}); // 503 if no Replicate key (see imagejobs.js)
@@ -82,9 +83,8 @@ post('/hashtag-sets',async(req,res)=>{const[r]=await q('INSERT INTO hashtag_sets
 del('/hashtag-sets/:id',async(req,res)=>{await q('DELETE FROM hashtag_sets WHERE id=$1 AND user_id=$2',[req.params.id,req.uid]);res.json({ok:true})});
 /* scheduling */
 get('/schedule',async(req,res)=>res.json(await q('SELECT id,caption,platforms,scheduled_at,status,error,published_at,(image IS NOT NULL) has_image FROM scheduled_posts WHERE user_id=$1 ORDER BY scheduled_at DESC',[req.uid])));
-post('/schedule',async(req,res)=>{const{caption,image,platforms,scheduledAt}=req.body||{};if(!caption||!scheduledAt)return res.status(400).json({error:'caption and scheduledAt required'});
- const[r]=await q('INSERT INTO scheduled_posts(user_id,caption,image,platforms,scheduled_at) VALUES($1,$2,$3,$4,$5) RETURNING id',[req.uid,caption,image||null,platforms||['instagram'],scheduledAt]);res.json(r)});
-patch('/schedule/:id',async(req,res)=>{await q(`UPDATE scheduled_posts SET status='scheduled',error=NULL,scheduled_at=COALESCE($3,now()) WHERE id=$1 AND user_id=$2`,[req.params.id,req.uid,req.body?.scheduledAt||null]);res.json({ok:true})});
+const sch=makeSchedule({q});post('/schedule',sch.create);
+patch('/schedule/:id',sch.update);
 del('/schedule/:id',async(req,res)=>{await q('DELETE FROM scheduled_posts WHERE id=$1 AND user_id=$2',[req.params.id,req.uid]);res.json({ok:true})});
 /* assistant + finance */
 post('/assistant',limit('assistant',30,3600),assistant);get('/finance/plan',financeRoute);

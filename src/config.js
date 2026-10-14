@@ -9,7 +9,7 @@ export function envProblems(env = process.env, { needDb = true } = {}) {
   const js = env.JWT_SECRET;
   if (!js) p.push('JWT_SECRET is missing (set a random string of 32+ chars, e.g. `openssl rand -hex 32`)');
   else if (js.length < 32) p.push(`JWT_SECRET is too short (${js.length} chars, need 32+)`);
-  else if (js === DEV_SECRET || (prod && /change-me/i.test(js))) p.push('JWT_SECRET is a placeholder value; set a real random secret');
+  else if (js === DEV_SECRET || /replace[_-]?me/i.test(js) || (prod && /change-me/i.test(js))) p.push('JWT_SECRET is a placeholder value; set a real random secret');
   const ek = env.ENCRYPTION_KEY;
   if (!ek) p.push('ENCRYPTION_KEY is missing (need exactly 64 hex chars, e.g. `openssl rand -hex 32`)');
   else if (!/^[0-9a-fA-F]{64}$/.test(ek)) p.push('ENCRYPTION_KEY is malformed (need exactly 64 hex characters)');

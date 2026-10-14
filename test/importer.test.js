@@ -6,6 +6,6 @@ test('normalize maps aliases and types, strips thousands separators',()=>{
  const{rows,invalid}=normalizePosts(parseCsv('date,media_type,likes,comments,reach\n2026-09-01,Reel,"1,200",5,5000'));
  assert.strictEqual(invalid.length,0);assert.strictEqual(rows[0].type,'REEL');assert.strictEqual(rows[0].likes,1200);assert.strictEqual(rows[0].saves,0)});
 test('normalize reports bad rows without throwing',()=>{
- const{rows,invalid}=normalizePosts([{posted_at:'nope',reach:1},{posted_at:'2026-09-01',type:'story',reach:5},{posted_at:'2026-09-01',likes:-3,reach:5},{posted_at:'2026-09-01',likes:1},{posted_at:'2026-09-01',type:'image',reach:9}]);
+ const{rows,invalid}=normalizePosts([{posted_at:'nope',reach:1},{posted_at:'2026-09-01',type:'podcast',reach:5},{posted_at:'2026-09-01',likes:-3,reach:5},{posted_at:'2026-09-01',likes:1},{posted_at:'2026-09-01',type:'image',reach:9}]);
  assert.strictEqual(rows.length,1);assert.strictEqual(invalid.length,4)});
 test('normalize rejects non-arrays and oversized input',()=>{assert.throws(()=>normalizePosts({}));assert.throws(()=>normalizePosts(new Array(MAX_ROWS+1).fill({})))});

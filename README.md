@@ -16,15 +16,14 @@ The API **exits at boot** with a clear message if these are missing or malformed
     docker compose exec api node src/seed.js    # demo@growthengine.ai / demo1234
 
 ## Run on Windows without Docker
-1. Install Node 20+, PostgreSQL 16 (set a password for `postgres`) and a Redis-compatible server (Memurai Developer, or Redis inside WSL2).
+1. Install Node 20.12+ (22 or newer recommended; the `.env` file is loaded by `src/loadenv.js`, which needs `process.loadEnvFile`), PostgreSQL 16 (set a password for `postgres`) and a Redis-compatible server (Memurai Developer, or Redis inside WSL2).
 2. Create the database (PowerShell): `psql -U postgres -c "CREATE USER ge WITH PASSWORD 'ge' SUPERUSER" -c "CREATE DATABASE ge OWNER ge"`
 3. `copy .env.example .env`, then set `JWT_SECRET`, `ENCRYPTION_KEY` (command above); the default `DATABASE_URL` and `REDIS_URL` already match steps 1-2.
-4. Load the env vars into your shell (PowerShell): `Get-Content .env | ForEach-Object { if ($_ -match '^\s*([^#=]+)=(.*?)(\s+#.*)?$') { [Environment]::SetEnvironmentVariable($Matches[1].Trim(), $Matches[2].Trim()) } }`
-5. `npm install`, `npm run migrate`, `npm run seed`, `npm run dev` (API on :3000, `INLINE_WORKER=1` runs the workers in-process).
-6. Frontend: `cd web`, `npm install`, `npm run dev` (http://localhost:5173, proxies `/api` to :3000).
+4. `npm install`, `npm run migrate`, `npm run seed`, `npm run dev` (API on :3000, `INLINE_WORKER=1` runs the workers in-process).
+5. Frontend: `cd web`, `npm install`, `npm run dev` (http://localhost:5173, proxies `/api` to :3000).
 
 ## Tests
-    npm test            # unit tests (crypto, advisor, config, importer, phase 1 logic)
+    npm test            # unit tests (crypto, advisor, config, importer, phase 1 logic, import job, schedule)
     cd web && npm run build
 
 ## API quick tour
@@ -46,6 +45,8 @@ The API **exits at boot** with a clear message if these are missing or malformed
 
 CSV columns (case-insensitive, common aliases accepted): `date`, `type` (reel / carousel / image), `likes`, `comments`, `saves`, `shares`, `reach` (required), `impressions`, `watch_s`, `caption`.
 
+**Dates:** use ISO (`2026-10-01` or `2026-10-01T10:00:00Z`). Slash dates are accepted only when unambiguous (`13/10/2026` or `10/13/2026`); `01/10/2026` is rejected because it could be either, and the error says so. **Types:** reel, ig reel, carousel, image, photo and story are accepted (stories are stored as IMAGE). **Refresh imports (`?update=1`):** only the metrics present in the file are updated. A missing column or an empty cell leaves the stored value alone; an explicit `0` is a real 0. Posts are matched on date + type + caption, so a file without captions, or with date-only values, creates new rows instead of refreshing existing ones. Error lines in the response use the file's own numbering (CSV line numbers include the header).
+
 Daily post snapshots (`post_snapshots`) and a per-user `metrics_baseline` are written by the worker (`INLINE_WORKER=1` or `npm run worker`). History only accumulates while a worker is running. Run `npm run migrate` after pulling: it adds both tables.
 
 ## Limits (per user, Redis)
@@ -55,7 +56,7 @@ Assistant 30/h · images 20/h (assistant images count too) · captions + hashtag
 Push the repo, New → Blueprint, fill the `sync:false` env vars. **`ENCRYPTION_KEY` is mandatory.** Changing it later makes already-stored API keys unreadable (users must re-save them).
 
 ## Integration points
-- `src/worker.js`: `fetchProfile` uses Business Discovery when `IG_*` is set, else demo data; `processImport` / `processImage` are the import and image jobs. The image result is a base64 data URI today: replace it with an S3/CDN upload at the marked swap point.
+- `src/worker.js`: `fetchProfile` uses Business Discovery when `IG_*` is set, else demo data; `processImport` (built in `src/importjob.js`) and `processImage` are the import and image jobs. The image result is a base64 data URI today: replace it with an S3/CDN upload at the marked swap point.
 - `src/images.js`: ProductAI's model registry, reference-image routing and fallback chain.
-- `src/assistant.js`: one-shot assistant; with an LLM key it picks one action from live page metrics, otherwise regex rules decide. Assistant-generated images are still synchronous (see docs/AI_PROGRESS.md).
-- Not built yet: webhooks, TimescaleDB aggregates, S3 storage, and Phases 1-4 of the roadmap (see `docs/`).
+- `src/assistant.js`: one-shot assistant; with an LLM key it picks one action from live page metrics, otherwise regex rules decide. Assistant-generated images are queued like Content AI's: the card polls `GET /api/content/image/:jobId` (`src/imagejobs.js` is shared by both).
+- Not built yet: webhooks, TimescaleDB aggregates and S3 storage. Roadmap progress lives in `docs/AI_PROGRESS.md`.

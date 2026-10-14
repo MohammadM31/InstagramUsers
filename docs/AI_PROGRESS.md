@@ -23,7 +23,7 @@ Overall state: PHASE 1 IMPLEMENTED — UNVERIFIED. Phase 1 gate NOT passed.
 | ID | Status | Code evidence | Verification evidence | Blocker / next action |
 |---|---|---|---|---|
 | 0.1 | VERIFIED (API, previous session); UI card renders (user, 2026-10-13); UI upload not exercised | unchanged except 0.1b below | previous curl evidence + user: /import/status valid JSON, Settings card renders | Graph API path and an actual upload from the UI untested |
-| 0.1b | IMPLEMENTED — UNVERIFIED | worker.js processImport (update mode, `xmax=0` insert/update split), importer.js dedupeRows, routes.js `?update=1`/`updateExisting`, Settings.tsx checkbox | `dedupeRows` unit tests pass. The SQL (`ON CONFLICT (user_id,posted_at,type,md5(...)) DO UPDATE ... WHERE ... IS DISTINCT FROM`) has NOT been run against Postgres | run the 0.1b block of scripts/smoke-phase1.sh |
+| 0.1b | IMPLEMENTED — UNVERIFIED (reworked in the fix patch) | importjob.js `makeProcessImport` (INSERT ... ON CONFLICT DO NOTHING, then `UPDATE ... SET col=coalesce(v.col,p.col)` for existing posts, one transaction), importer.js `missing` per row + merging `dedupeRows`, routes.js `?update=1`/`updateExisting`, Settings.tsx checkbox | Unit tests assert the statements and parameters sent (missing metric -> NULL -> keeps stored value; explicit 0 overwrites). The SQL has NOT been run against Postgres | run scripts/smoke-fix1.sh (partial refresh block) and scripts/smoke-phase1.sh (0.1b block) |
 | 0.2 | VERIFIED (boot checks; user ran migrate, seed, /ready). `.env` loading: IMPLEMENTED — UNVERIFIED on Windows | loadenv.js imported first by server/worker/migrate/seed/config | test/loadenv.test.js passes on Linux Node 22 (CRLF .env, real env wins, missing .env ok) | user: run plain `node src/server.js` with only a .env file |
 | 0.3 | VERIFIED (assistant + login) | unchanged | previous session | image/captions buckets not driven to limit; monthly quotas deferred |
 | 0.4 | IMPLEMENTED — UNVERIFIED (provider call) | unchanged | | test with a real user key |
@@ -48,6 +48,14 @@ Overall state: PHASE 1 IMPLEMENTED — UNVERIFIED. Phase 1 gate NOT passed.
 - User decisions / approvals: see AI_DECISIONS.md ("implement the next step" taken as acceptance of defaults)
 - Exact next action: apply phase-1.diff, `npm run migrate`, `npm test`, `cd web && npm run build`, start with INLINE_WORKER=1, run `bash scripts/smoke-phase1.sh` and `bash scripts/smoke-regression.sh`, open Dashboard + Statistics + Settings in a browser, then report results so items can be marked VERIFIED
 - Stop at phase gate: YES (do not start 2.2/2.3 or Phase 3 until Phase 1 is verified and confirmed)
+
+## Fix patch after the Phase 1 review (phase-1-fix.diff) — IMPLEMENTED — UNVERIFIED against a live stack
+- Fixed: refresh import zeroed metrics the file did not contain (0.1b); ambiguous day/month dates were guessed; `.env.example` held the real secrets (rotate them: they are in git history); README contradicted the code.
+- Small fixes: true row numbers in import errors; Replicate key checked before the image rate limit; `--env-file=.env` removed from npm scripts; `IG Reel`/`Story` type aliases; `/schedule` returns 400 on invalid dates; `REPLACE_ME` JWT_SECRET rejected at boot.
+- Not done: priorities "Dismiss" persistence (needs server state; belongs with the 2.3 notifications work).
+- New files: src/importjob.js, src/schedule.js, test/fix1.test.js, scripts/smoke-fix1.sh. `npm test`: 42/42 pass (29 + 13 new). The existing importer test used `story` as its unknown-type example; Story is now valid, so it uses `podcast`.
+- NOT run: Postgres, Redis, `vite build`, a browser, the smoke scripts.
+- Known limits of the 0.1b refresh: posts are matched on date + type + caption, so a file with no caption column or date-only values inserts new rows instead of refreshing; a post whose Graph API insights failed has no reach and is rejected, never refreshed.
 
 ## Rules
 - Repository + fresh evidence outrank this ledger.

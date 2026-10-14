@@ -25,3 +25,11 @@ The PDF report asked for six decisions and said its defaults apply if the user j
 11. AI Context treats a page as "demo data" when at least half its posts have captions starting "Demo caption" (what `seed.js` writes). Heuristic; stated as a gap, not asserted as fact.
 12. Order of commits (agreed 2026-10-13 proposal): (a) apply phase-0-fix.diff (loads .env, removes growthengine-api.zip and the stray `tatus` file); (b) apply phase-1.diff; (c) run prettier as its own commit. Prettier runs last because the patch was built against the unformatted files.
 13. `.env` loading: `src/loadenv.js` uses `process.loadEnvFile` (Node 20.12+/21.7+). Variables already in the environment win, like `--env-file`. The `--env-file=.env` flags in package.json scripts are harmless and left in place.
+
+## 2026-10-14 — Phase 1 fix patch
+14. 0.1b: "missing means don't change". The refresh is now an UPDATE with `coalesce(incoming, stored)` per metric instead of ON CONFLICT DO UPDATE (whose EXCLUDED row cannot tell "absent" from 0). New rows still store 0 for absent metrics so engagement sums never hit NULL. An explicit 0 in the file is a real value.
+15. Dates: ambiguous slash/dot/dash dates (both numbers 12 or less, year last) are rejected, never guessed (user's option a). 2-digit years are rejected. Unambiguous slash dates are read as UTC.
+16. `Story` imports as IMAGE and `IG Reel` as REEL (user request). Consequence: stories count in feed engagement statistics.
+17. Import job moved to src/importjob.js and schedule handlers to src/schedule.js (injected deps, same pattern as insights.js, decision 7) so the fixes are unit-testable without Postgres.
+18. config.js also rejects `REPLACE_ME` placeholders for JWT_SECRET in every environment (the placeholder is longer than 32 characters and would otherwise boot).
+19. Priorities "Dismiss" persistence left as a Phase 2.3 task: it needs a server-side table and endpoints, which is a feature, not a one-line fix.
