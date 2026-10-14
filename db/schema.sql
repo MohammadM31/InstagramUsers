@@ -25,3 +25,9 @@ CREATE INDEX IF NOT EXISTS post_snapshots_post_time ON post_snapshots(post_id,ca
 CREATE UNIQUE INDEX IF NOT EXISTS post_snapshots_day ON post_snapshots(post_id,((captured_at AT TIME ZONE 'UTC')::date));
 -- 2.1 baseline: the user's numbers the first time the worker saw them, so the first day does not look like a sudden change.
 CREATE TABLE IF NOT EXISTS metrics_baseline(user_id uuid PRIMARY KEY REFERENCES users ON DELETE CASCADE,captured_at timestamptz NOT NULL DEFAULT now(),reach30d int,er numeric,best_post_er numeric,posts30d int);
+
+-- ===== Phase 2 (idempotent) =====
+-- 2.3 notifications. dedupe_key makes every alert fire once (per day/week/post), however often the hourly job runs.
+ALTER TABLE metrics_baseline ADD COLUMN IF NOT EXISTS ahead text[]; -- competitors that were already ahead of the user when baselined (NULL = not baselined yet)
+CREATE TABLE IF NOT EXISTS notifications(id serial PRIMARY KEY,user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,kind text NOT NULL,title text NOT NULL,body text NOT NULL,watch text,dedupe_key text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),read_at timestamptz,UNIQUE(user_id,dedupe_key));
+CREATE INDEX IF NOT EXISTS notifications_user_time ON notifications(user_id,created_at DESC);

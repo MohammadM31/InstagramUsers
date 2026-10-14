@@ -23,7 +23,7 @@ The API **exits at boot** with a clear message if these are missing or malformed
 5. Frontend: `cd web`, `npm install`, `npm run dev` (http://localhost:5173, proxies `/api` to :3000).
 
 ## Tests
-    npm test            # unit tests (crypto, advisor, config, importer, phase 1 logic, import job, schedule)
+    npm test            # unit tests (crypto, advisor, config, importer, phase 1+2 logic, import job, schedule, notifications)
     cd web && npm run build
 
 ## API quick tour
@@ -38,6 +38,8 @@ The API **exits at boot** with a clear message if these are missing or malformed
     curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/priorities
     curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/ai/context
     curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/marketing/breakdown
+    # Phase 2: GET /api/posts/:id/analysis (text, delta, rank); GET /api/notifications, PATCH /api/notifications/:id|read-all, DELETE /api/notifications/:id
+    curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/notifications
     # images are queued (Content AI and the assistant alike): POST returns {jobId}; poll until status is done/failed
     curl -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"prompt":"coffee cup on marble","ratio":"4:5","overlayText":"New Menu"}' localhost:3000/api/content/image
     curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/content/image/<jobId>

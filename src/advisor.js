@@ -135,3 +135,119 @@ export function contextGaps(m, s) {
   gaps.push('Collabs and mentions are estimated from caption text, and growth is reach change, not followers.');
   return gaps;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Roadmap 2.2: per-post analysis. Pure: `post` is a posts row (+ optional `er` in %), `snapshots` are post_snapshots rows,
+// `m` is pageMetrics(). Returns { text, delta }. It compares numbers; it never claims to know what CAUSED them.
+// ---------------------------------------------------------------------------------------------
+const num0 = v => Number(v) || 0;
+const interactionsOf = p => num0(p.likes) + num0(p.comments) + num0(p.saves) + num0(p.shares);
+const erOf = p => (num0(p.reach) > 0 ? +(interactionsOf(p) * 100 / num0(p.reach)).toFixed(2) : null);
+const nice = n => Math.round(Number(n)).toLocaleString('en-US');
+const dayKey = v => new Date(v).toISOString().slice(0, 10);
+const vs = (er, ref) => { const d = er - ref; return d >= 0.5 ? 'above' : d <= -0.5 ? 'below' : 'in line with'; };
+
+// Needs snapshots on at least two different UTC days; otherwise there is no trend to report.
+export function snapshotDelta(snapshots) {
+  const s = [...(snapshots || [])].sort((a, b) => new Date(a.captured_at) - new Date(b.captured_at));
+  const days = new Set(s.map(x => dayKey(x.captured_at)));
+  if (s.length < 2 || days.size < 2) return null;
+  const a = s[0], b = s[s.length - 1], ea = erOf(a), eb = erOf(b);
+  const pct = (x, y) => (num0(x) ? +(((num0(y) - num0(x)) / num0(x)) * 100).toFixed(1) : null);
+  return {
+    since: a.captured_at, until: b.captured_at, days: days.size,
+    reach: { from: num0(a.reach), to: num0(b.reach), pct: pct(a.reach, b.reach) },
+    interactions: { from: interactionsOf(a), to: interactionsOf(b), pct: pct(interactionsOf(a), interactionsOf(b)) },
+    er: { from: ea, to: eb, points: ea !== null && eb !== null ? +(eb - ea).toFixed(2) : null },
+  };
+}
+
+export function postAnalysis(post, snapshots, m) {
+  const er = post.er !== undefined && post.er !== null ? Number(post.er) : erOf(post);
+  const delta = snapshotDelta(snapshots);
+  const parts = [];
+
+  if (er === null || Number.isNaN(er)) {
+    parts.push('No reach is recorded for this post, so its engagement rate cannot be calculated.');
+  } else {
+    const typeEr = m?.types?.find(t => t.type === post.type)?.er;
+    const pageEr = m?.hasData ? m.er : null;
+    let s = `This ${post.type} reached ${nice(post.reach)} accounts with an engagement rate of ${er}%.`;
+    if (typeEr) s += ` That is ${vs(er, typeEr)} your average ${post.type} (${typeEr}%).`;
+    if (pageEr) s += ` Your page averaged ${pageEr}% over the last 30 days.`;
+    parts.push(s);
+    const total = interactionsOf(post);
+    if (total > 0) {
+      const comp = [['likes', post.likes], ['comments', post.comments], ['saves', post.saves], ['shares', post.shares]]
+        .map(([k, v]) => [k, num0(v)]).sort((a, b) => b[1] - a[1]);
+      parts.push(`Most of its engagement came from ${comp[0][0]} (${Math.round(comp[0][1] * 100 / total)}% of ${nice(total)} interactions).`);
+    }
+  }
+
+  if (delta) {
+    const sign = v => (v > 0 ? '+' : '') + v;
+    let s = `Over ${delta.days} days of snapshots, reach went from ${nice(delta.reach.from)} to ${nice(delta.reach.to)}`;
+    if (delta.reach.pct !== null) s += ` (${sign(delta.reach.pct)}%)`;
+    s += delta.er.points !== null ? ` and engagement rate moved ${sign(delta.er.points)} points.` : '.';
+    parts.push(s);
+  } else {
+    const n = (snapshots || []).length;
+    parts.push(`No trend yet: it needs snapshots from at least 2 different days (${n} so far).`);
+  }
+  parts.push('This compares numbers. It does not show what caused them.');
+  return { text: parts.join(' '), delta };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Roadmap 2.3: alert detection. Pure. Everything is measured against the user's stored baseline (metrics_baseline),
+// so the first run after a baseline exists cannot raise a "sudden change" alert.
+//   base = { reach30d, er, best_post_er, ahead }   ahead === null means "competitors not baselined yet"
+//   cur  = { reach30d, er, best_post_er, userAvgLc, competitors }   competitors === null means "no usable competitor data"
+//          competitors = [{ handle, avgLc, n }]  avgLc = average likes+comments per post (reach is not public for other accounts)
+// Returns { alerts: [{kind,title,body,watch,key}], state: { best_post_er, ahead } } where state is what the baseline should store next.
+// ---------------------------------------------------------------------------------------------
+export const ALERT_RULES = { reachDropPct: 15, erDropPoints: 2, minCompetitorPosts: 3 };
+
+export function detectAlerts(base, cur, now = Date.now()) {
+  const week = Math.floor(now / 6048e5); // a persistent drop alerts once per week, not every hour
+  const alerts = [], n = v => (v === null || v === undefined ? null : Number(v));
+  const bReach = n(base.reach30d), cReach = n(cur.reach30d), bEr = n(base.er), cEr = n(cur.er), bBest = n(base.best_post_er), cBest = n(cur.best_post_er);
+
+  if (bReach > 0 && cReach !== null && cReach < bReach * (1 - ALERT_RULES.reachDropPct / 100)) {
+    const pct = Math.round((cReach / bReach - 1) * 100);
+    alerts.push({ kind: 'reach_drop', key: `reach_drop:w${week}`,
+      title: `Reach is down ${Math.abs(pct)}% since tracking started`,
+      body: `Reach over the last 30 days is ${nice(cReach)}, against ${nice(bReach)} when tracking started. If you have posted less recently, older posts have aged out of the 30-day window.`,
+      watch: 'Reach over the last 30 days, and posts per week' });
+  }
+  if (bEr !== null && cEr !== null && bEr - cEr > ALERT_RULES.erDropPoints) {
+    alerts.push({ kind: 'er_drop', key: `er_drop:w${week}`,
+      title: `Engagement rate is down ${+(bEr - cEr).toFixed(1)} points`,
+      body: `Engagement rate over the last 30 days is ${cEr}%, against ${bEr}% when tracking started.`,
+      watch: 'Engagement rate and comments per post' });
+  }
+
+  let best = bBest;
+  if (cBest !== null && (bBest === null || cBest > bBest)) {
+    if (bBest !== null) alerts.push({ kind: 'best_post', key: `best_post:${cBest}`,
+      title: 'New best-ever post',
+      body: `A post now has an engagement rate of ${cBest}%, above your previous best of ${bBest}%.`,
+      watch: 'Whether the next posts of the same type hold that rate' });
+    best = cBest; // stored either way, so it alerts once
+  }
+
+  let ahead = base.ahead ?? null;
+  if (cur.competitors) {
+    const now_ahead = cur.userAvgLc === null || cur.userAvgLc === undefined ? [] :
+      cur.competitors.filter(c => c.n >= ALERT_RULES.minCompetitorPosts && c.avgLc > cur.userAvgLc).map(c => c.handle).sort();
+    if (base.ahead) {
+      for (const c of cur.competitors.filter(c => now_ahead.includes(c.handle) && !base.ahead.includes(c.handle)))
+        alerts.push({ kind: 'competitor', key: `competitor:${c.handle}:w${week}`,
+          title: `@${c.handle} now out-engages you`,
+          body: `@${c.handle} averages ${nice(c.avgLc)} likes and comments per post over the last 30 days, against ${nice(cur.userAvgLc)} for you. Reach is not public for other accounts, so this compares likes and comments only.`,
+          watch: 'Likes and comments per post, yours vs theirs' });
+    }
+    ahead = now_ahead; // first run: baseline only, no alerts
+  }
+  return { alerts, state: { best_post_er: best, ahead } };
+}

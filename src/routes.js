@@ -1,4 +1,4 @@
-import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';
+import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';import {makeNotifications} from './notifications.js';
 import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ,importQ,imageQ} from './queue.js';import {limit} from './ratelimit.js';import {llmConfig,keyFor} from './keys.js';import {parseCsv} from './csv.js';import {MAX_ROWS} from './importer.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';
 export const api=Router();api.use(requireAuth);
 const wrap=f=>(req,res,next)=>Promise.resolve(f(req,res,next)).catch(next); // Express 4 needs this for async errors
@@ -61,7 +61,7 @@ get('/import/jobs/:id',async(req,res)=>{const j=await importQ.getJob(req.params.
  const st=await j.getState();res.json(st==='completed'?{status:'done',...j.returnvalue}:st==='failed'?{status:'failed',error:j.failedReason}:{status:'pending'})});
 get('/import/status',async(req,res)=>{const[c]=await q('SELECT count(*)::int count FROM posts WHERE user_id=$1',[req.uid]),[l]=await q('SELECT source,at,imported,duplicates FROM import_log WHERE user_id=$1 ORDER BY at DESC LIMIT 1',[req.uid]);
  res.json({count:c.count,lastImportAt:l?.at||null,source:l?.source||null,lastResult:l?{imported:l.imported,duplicates:l.duplicates}:null})});
-get('/gdpr/export',async(req,res)=>{const o={};for(const t of['posts','competitors','scrape_audit','hashtag_sets','import_log'])o[t]=await q(`SELECT * FROM ${t} WHERE user_id=$1`,[req.uid]);
+get('/gdpr/export',async(req,res)=>{const o={};for(const t of['posts','competitors','scrape_audit','hashtag_sets','import_log','notifications'])o[t]=await q(`SELECT * FROM ${t} WHERE user_id=$1`,[req.uid]);
  o.scheduled_posts=await q('SELECT id,caption,platforms,scheduled_at,status,error,published_at FROM scheduled_posts WHERE user_id=$1',[req.uid]);o.api_keys=await q('SELECT name FROM api_keys WHERE user_id=$1',[req.uid]);
  o.post_snapshots=await q('SELECT s.* FROM post_snapshots s JOIN posts p ON p.id=s.post_id WHERE p.user_id=$1 ORDER BY s.post_id,s.captured_at',[req.uid]);o.metrics_baseline=await q('SELECT * FROM metrics_baseline WHERE user_id=$1',[req.uid]);res.json(o)});
 del('/gdpr/account',async(req,res)=>{await q('DELETE FROM users WHERE id=$1',[req.uid]);res.json({deleted:true})});
@@ -90,3 +90,6 @@ del('/schedule/:id',async(req,res)=>{await q('DELETE FROM scheduled_posts WHERE 
 post('/assistant',limit('assistant',30,3600),assistant);get('/finance/plan',financeRoute);
 /* Phase 1: priorities (1.1), AI context (1.2), marketing breakdown (1.4). Handlers live in insights.js */
 const ins=makeInsights({q,pageMetrics});get('/priorities',ins.priorities);get('/ai/context',ins.aiContext);get('/marketing/breakdown',ins.marketing);
+/* Phase 2: per-post analysis (2.2) and notifications (2.3). Handlers live in insights.js / notifications.js */
+get('/posts/:id/analysis',ins.postAnalysis);
+const nt=makeNotifications({q});get('/notifications',nt.list);api.patch('/notifications/read-all',wrap(nt.markAll));api.patch('/notifications/:id',wrap(nt.mark));del('/notifications/:id',nt.remove);

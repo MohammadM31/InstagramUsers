@@ -45,3 +45,13 @@ a.btn{text-decoration:none;display:inline-block}
 /* Phase 1: Today's Priorities */
 .prio{padding:10px 0;border-bottom:1px solid var(--bd)}.prio:last-child{border-bottom:0}
 .pi{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:50%;background:var(--soft);color:var(--ac)}.pi svg{width:16px;height:16px}
+
+/* 2.2 expandable analysis row, 2.3 notification bell */
+.xp td{background:var(--soft);padding:12px 16px;white-space:normal}
+.bellw{position:relative}.bellw .ib{width:36px;height:36px}
+.bb{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;border-radius:8px;background:var(--dn);color:#fff;font-size:10px;font-weight:600;display:grid;place-items:center;padding:0 4px;pointer-events:none}
+.nscrim{position:fixed;inset:0;z-index:29}
+.nlist{position:absolute;right:0;top:42px;width:340px;max-width:90vw;max-height:420px;overflow:auto;background:var(--bg);border:1px solid var(--bd);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);z-index:30;padding:8px}
+.nit{padding:10px;border-radius:8px;border-bottom:1px solid var(--bd);cursor:pointer}.nit:last-child{border-bottom:0}.nit:hover{background:var(--soft)}
+.nit.un b::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ac);margin-right:6px}
+.nit p{margin:4px 0;font-size:13px}.nx{float:right;background:none;border:0;color:var(--mu);cursor:pointer;font-size:14px}

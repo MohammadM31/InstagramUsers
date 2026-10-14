@@ -1,6 +1,6 @@
 // Roadmap Phase 1 handlers. Dependencies are injected (see routes.js) so the handlers can be unit-tested without Postgres.
 // Pure logic lives in advisor.js; this file only reads data and shapes responses.
-import { advise, health, marketingBreakdown, contextGaps } from './advisor.js';
+import { advise, health, marketingBreakdown, contextGaps, postAnalysis as analyse } from './advisor.js';
 
 export function makeInsights({ q, pageMetrics }) {
   // 1.1 GET /api/priorities: the ranked tips, each with why + watch (see advisor.advise)
@@ -40,5 +40,23 @@ export function makeInsights({ q, pageMetrics }) {
   // 1.4 GET /api/marketing/breakdown
   const marketing = async (req, res) => res.json(marketingBreakdown(await pageMetrics(req.uid)));
 
-  return { priorities, aiContext, marketing };
+  // 2.2 GET /api/posts/:id/analysis -> { text, delta, rank, snapshots }. Ownership is enforced in the first query (404 for someone else's post).
+  const postAnalysis = async (req, res) => {
+    if (!/^\d{1,9}$/.test(String(req.params.id))) return res.status(400).json({ error: 'bad post id' });
+    const [post] = await q(`SELECT *, round((likes+comments+saves+shares)*100.0/NULLIF(reach,0),2) er FROM posts WHERE id=$1 AND user_id=$2`, [req.params.id, req.uid]);
+    if (!post) return res.sendStatus(404);
+    const snaps = await q('SELECT captured_at,likes,comments,saves,shares,reach FROM post_snapshots WHERE post_id=$1 ORDER BY captured_at', [post.id]);
+    const m = await pageMetrics(req.uid);
+    let rank = null;
+    if (post.er !== null) {
+      const [r] = await q(`SELECT count(*)::int total, count(*) FILTER (WHERE er>$2::numeric)::int higher,
+        count(*) FILTER (WHERE type=$3)::int type_total, count(*) FILTER (WHERE type=$3 AND er>$2::numeric)::int type_higher
+        FROM (SELECT type, round((likes+comments+saves+shares)*100.0/NULLIF(reach,0),2) er FROM posts WHERE user_id=$1 AND reach>0) x`, [req.uid, post.er, post.type]);
+      rank = { position: r.higher + 1, of: r.total, type: post.type, typePosition: r.type_higher + 1, typeOf: r.type_total, by: 'engagement rate' };
+    }
+    const { text, delta } = analyse(post, snaps, m);
+    res.json({ text, delta, rank, snapshots: { count: snaps.length, lastAt: snaps.length ? snaps[snaps.length - 1].captured_at : null } });
+  };
+
+  return { priorities, aiContext, marketing, postAnalysis };
 }

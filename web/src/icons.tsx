@@ -1,6 +1,7 @@
 const P=(d:string)=><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d}/></svg>;
 export const ICONS:Record<string,JSX.Element>={
  menu:P('M3 6h18M3 12h18M3 18h18'),
+ bell:P('M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0'),
  Dashboard:P('M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z'),
  Statistics:P('M4 20V10M10 20V4M16 20v-8M22 20H2'),
  // Today's Priorities: one icon per advice kind (advisor.advise)

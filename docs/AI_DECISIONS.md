@@ -33,3 +33,15 @@ The PDF report asked for six decisions and said its defaults apply if the user j
 17. Import job moved to src/importjob.js and schedule handlers to src/schedule.js (injected deps, same pattern as insights.js, decision 7) so the fixes are unit-testable without Postgres.
 18. config.js also rejects `REPLACE_ME` placeholders for JWT_SECRET in every environment (the placeholder is longer than 32 characters and would otherwise boot).
 19. Priorities "Dismiss" persistence left as a Phase 2.3 task: it needs a server-side table and endpoints, which is a feature, not a one-line fix.
+
+## 2026-10-14 — Phase 2 (2.2, 2.3)
+20. Phase 1 gate: the user wrote "everything works" after running the stack and checking the UI. Recorded as confirmation; the screens were not itemised.
+21. 2.2 returns `{text, delta, rank, snapshots}`. `delta` is null until snapshots exist on at least two different UTC days. The text compares ER with the user's average for that post type and the 30-day page average, names the largest interaction share, and always ends by saying it compares numbers rather than explaining causes (uncertainty rule).
+22. 2.3 alerts are measured against `metrics_baseline`, not against the previous 30 days, so a page that has always looked weak does not alert on day one. Consequence: the baseline never rolls forward; a drop is "since tracking started". A rolling baseline is a possible later change.
+23. Alert de-duplication is in the database (`UNIQUE(user_id,dedupe_key)`): reach and ER drops once per week, a best post once per ER value, a competitor once per rival per week. The hourly job is therefore safe to run any number of times.
+24. "Competitor overtaking reach" is approximated by average likes + comments per post, because reach of other accounts is not public. The alert text says so. It needs 3+ competitor posts in 30 days.
+25. Competitor alerts are suppressed when the user's latest scrape source is `demo` (synthetic data must not tell a user a rival overtook them). The competitor list at baseline time is stored in `metrics_baseline.ahead`; rivals already ahead then never alert, and the first run only records it.
+26. The "monitoring threshold" alert listed in 2.3 is deferred to Phase 3 (it needs `posts.monitor_until`).
+27. Priorities "Dismiss" persistence is still deferred (decision 19). It is not part of the plan's 2.3 scope and needs a product choice (how long a dismissal lasts), so it was not built.
+28. `DataTable` gained an optional `expand` prop (additive; existing callers unchanged). Rows are keyed by `id` when present.
+
