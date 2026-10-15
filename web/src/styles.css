@@ -256,3 +256,12 @@
     .banner{display:flex;gap:12px;align-items:center;justify-content:space-between;margin:0 0 12px;padding:10px 14px;border-radius:8px;border:1px solid var(--bd);background:var(--soft)}
     .banner.ok{border-color:var(--up)}.banner.bad{border-color:var(--dn)}
     .undo{display:flex;gap:8px;align-items:center;margin:6px 0}
+
+/* O.1 onboarding wizard */
+.ob{max-width:640px;margin:32px auto;display:grid;gap:12px;padding:0 16px}
+.ob .obf{display:grid;gap:4px;margin:10px 0}
+.ob .obchk{display:flex;gap:8px;align-items:flex-start;margin:10px 0}
+.obdots{display:flex;gap:6px;justify-content:center}
+.obdots i{width:28px;height:4px;border-radius:2px;background:var(--bd)}
+.obdots i.done{background:var(--mu)}
+.obdots i.on{background:var(--ac)}

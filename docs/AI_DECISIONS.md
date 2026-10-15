@@ -79,3 +79,9 @@ The PDF report asked for six decisions and said its defaults apply if the user j
 45. Steps: about, connect, business, voice, goals, content. connect (O.2) and voice (O.3) own no profile fields yet. Only 'about' (display name) is required; every other step can be skipped; saving a skipped step un-skips it; progress never moves backwards when an earlier step is edited.
 46. Validation is strict: an unknown field or a field from another step is a 400 (never silently dropped); null clears optional fields; numbers must be JSON numbers. goal_baseline_value is accepted but is filled by O.4 at goal time. goal_secondary must differ from goal_primary when both are in one request (a stored-vs-new clash is not checked).
 47. PUT /api/profile (O.6 backend) is a partial update across all fields, does not change onboarding progress, and returns 409 if the user never started onboarding.
+
+## 2026-10-15 - O.1 UI (session 4c)
+48. Guard lives in App.tsx (no router): after login it asks GET /api/onboarding; completed -> app, otherwise the wizard. If that request fails the app opens normally (a profile-check failure must never lock a user out).
+49. The wizard's voice step is a placeholder (O.3 not built). Skipping it records "skipped" on the server so O.3 can offer it again; Settings (O.6) will be the place to set it later.
+50. The wizard pre-fills time zone from the browser and language "en" as suggestions only; nothing is saved until the user presses Continue.
+51. test/onboardingUi.test.js imports a .ts file, which needs Node 22.18+ (the user runs 24.19). On older Node those 7 tests are reported as skipped, not failed.

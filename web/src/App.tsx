@@ -1,6 +1,6 @@
 import {useState,useEffect} from 'react';
 import type {ComponentType} from 'react';
-import {tok} from './api';
+import {tok,api} from './api';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Analytics from './pages/Analytics';
@@ -12,6 +12,7 @@ import Roadmap from './pages/Roadmap';
 import Finance from './pages/Finance';
 import Assistant from './Assistant';
 import Notifications from './Notifications';
+import Onboarding from './pages/Onboarding';
 import {ICONS} from './icons';
 import {IgBadge} from './pages/InstagramCard';
 import {parseIgRedirect} from './ig';
@@ -21,12 +22,16 @@ const IGR=parseIgRedirect(); // /?ig=connected|error&reason=... after the Instag
 const PAGES:Record<string,ComponentType>={Dashboard,Statistics:Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,'Finance & Capital':Finance,Settings,Roadmap};
 
 export default function App(){
-  const[t,setT]=useState(tok()),[p,setP]=useState(IGR?'Settings':'Dashboard'),[igMsg,setIgMsg]=useState(IGR),[open,setOpen]=useState(false),
+  const[t,setT]=useState(tok()),[p,setP]=useState(IGR?'Settings':'Dashboard'),[igMsg,setIgMsg]=useState(IGR),[open,setOpen]=useState(false),[ob,setOb]=useState<'loading'|'needed'|'ok'>('loading'),
     [dk,setDk]=useState(()=>localStorage.getItem('theme')?localStorage.getItem('theme')==='dark':matchMedia('(prefers-color-scheme:dark)').matches);
   useEffect(()=>{document.documentElement.dataset.theme=dk?'dark':'light';localStorage.setItem('theme',dk?'dark':'light')},[dk]);
   useEffect(()=>{if(IGR)history.replaceState(null,'',location.pathname)},[]);
+  // O.1: new accounts see the setup wizard first. Existing and demo users are marked complete by the server. If the check fails, never block the app.
+  useEffect(()=>{if(!t){setOb('loading');return}let live=true;api<{completed:boolean}>('/onboarding').then(d=>live&&setOb(d.completed?'ok':'needed')).catch(()=>live&&setOb('ok'));return()=>{live=false}},[t]);
   useEffect(()=>{const k=(e:KeyboardEvent)=>e.key==='Escape'&&setOpen(false);addEventListener('keydown',k);return()=>removeEventListener('keydown',k)},[]);
   if(!t)return <Login onAuth={()=>setT(tok())}/>;
+  if(ob==='loading')return <div className="st" style={{margin:24}}>Loading…</div>;
+  if(ob==='needed')return <Onboarding igMsg={igMsg} onDone={()=>setOb('ok')}/>;
   const P=PAGES[p];
   return <div className={'shell'+(open?' drawer-open':'')}>
     <aside className="rail">
