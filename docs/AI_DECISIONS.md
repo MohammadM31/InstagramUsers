@@ -72,3 +72,10 @@ The PDF report asked for six decisions and said its defaults apply if the user j
 40. The deletion callback deletes posts that carry an ig_media_id (same rule as decision 32), the A.1c tables, the token and the ig_accounts row. It stores only sha256(fb user id) plus a result text, and no user id.
 41. /privacy is a DRAFT written from what the code stores. It shows a DRAFT banner until PRIVACY_OPERATOR and PRIVACY_CONTACT_EMAIL are set. It must be reviewed (and updated when A.2 comments ship) before Meta submission.
 42. The ?ig= redirect result is read once at load, shown as a dismissible banner, the URL is cleaned, and the app opens Settings.
+
+## 2026-10-15 - O.1 (session 4, after "continue development")
+43. "continue development" taken as the go-ahead past Gate A.1 for work that needs no Meta account (O.1). Gate A.1 itself is still NOT passed: it needs A.0 + a real test account. Decisions 34-37 stay PROPOSED (the user did not answer them).
+44. business_profile is created inside a guarded DO block: existing users are backfilled as complete exactly once (table creation), so nobody already using the app is forced through onboarding, while users who register later get no row and start at step 'about'. seed.js marks the demo user complete.
+45. Steps: about, connect, business, voice, goals, content. connect (O.2) and voice (O.3) own no profile fields yet. Only 'about' (display name) is required; every other step can be skipped; saving a skipped step un-skips it; progress never moves backwards when an earlier step is edited.
+46. Validation is strict: an unknown field or a field from another step is a 400 (never silently dropped); null clears optional fields; numbers must be JSON numbers. goal_baseline_value is accepted but is filled by O.4 at goal time. goal_secondary must differ from goal_primary when both are in one request (a stored-vs-new clash is not checked).
+47. PUT /api/profile (O.6 backend) is a partial update across all fields, does not change onboarding progress, and returns 409 if the user never started onboarding.

@@ -61,3 +61,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS ig_audience_week ON ig_audience(user_id,((date
 CREATE TABLE IF NOT EXISTS priority_dismissals(user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,tip_key text NOT NULL,until timestamptz NOT NULL,PRIMARY KEY(user_id,tip_key));
 -- A.1d data-deletion requests from Meta. Only a hash of the Facebook user id is stored, never the id itself, and no user_id (the user's rows are gone).
 CREATE TABLE IF NOT EXISTS ig_deletion_requests(code text PRIMARY KEY,fb_hash text NOT NULL,status text NOT NULL,detail text,requested_at timestamptz NOT NULL DEFAULT now());
+-- O.1 business profile + onboarding progress (one row per user). Created inside a guard so the one-time backfill below runs ONLY when the table is first
+-- created: users that already exist then are marked complete (never forced through onboarding); users who register later get no row until they start it.
+DO $$ BEGIN
+  IF to_regclass('public.business_profile') IS NULL THEN
+    CREATE TABLE business_profile(user_id uuid PRIMARY KEY REFERENCES users ON DELETE CASCADE,display_name text,business_name text,role text,timezone text,languages text[],
+      business_summary text,offerings text[],niche text,niche_keywords text[],audience text,stage text,goal_primary text,goal_secondary text,goal_target_metric text,
+      goal_target_value numeric,goal_baseline_value numeric,goal_deadline date,posts_per_week int,content_by text,video_ok boolean,auto_proposals boolean NOT NULL DEFAULT false,
+      onboarding_step text NOT NULL DEFAULT 'about',skipped_steps text[] NOT NULL DEFAULT '{}',completed_at timestamptz,updated_at timestamptz NOT NULL DEFAULT now());
+    INSERT INTO business_profile(user_id,onboarding_step,completed_at) SELECT id,'done',now() FROM users;
+  END IF;
+END $$;
