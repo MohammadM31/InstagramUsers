@@ -4,7 +4,6 @@ export const ICONS:Record<string,JSX.Element>={
  bell:P('M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0'),
  Dashboard:P('M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z'),
  Statistics:P('M4 20V10M10 20V4M16 20v-8M22 20H2'),
- // Today's Priorities: one icon per advice kind (advisor.advise)
  start:P('M12 5v14M5 12h14'),
  collab:P('M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8'),
  mention:P('M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.9 7.9'),
@@ -24,4 +23,6 @@ export const ICONS:Record<string,JSX.Element>={
  moon:P('M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z'),
  clip:P('M21 11l-9 9a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.3-8.3'),
  logout:P('M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9'),
+ chevDown:P('M6 9l6 6 6-6'),
+ chevUp:P('M18 15l-6-6-6 6'),
 };

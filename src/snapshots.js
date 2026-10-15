@@ -11,9 +11,9 @@ const SNAPSHOT_SQL = `INSERT INTO post_snapshots(post_id,likes,comments,saves,sh
 const BASELINE_SQL = `INSERT INTO metrics_baseline(user_id,reach30d,er,best_post_er,posts30d)
   SELECT user_id,
     coalesce(sum(reach) FILTER (WHERE posted_at>now()-interval '30 days'),0)::int,
-    round((sum(likes+comments+saves+shares) FILTER (WHERE posted_at>now()-interval '30 days'))*100.0
+    round((sum(coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0)) FILTER (WHERE posted_at>now()-interval '30 days'))*100.0
       / NULLIF(sum(reach) FILTER (WHERE posted_at>now()-interval '30 days'),0),2),
-    round(max((likes+comments+saves+shares)*100.0/NULLIF(reach,0)),2),
+    round(max((coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))*100.0/NULLIF(reach,0)),2),
     (count(*) FILTER (WHERE posted_at>now()-interval '30 days'))::int
   FROM posts GROUP BY user_id
   ON CONFLICT (user_id) DO NOTHING

@@ -1,4 +1,4 @@
-import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';import {makeNotifications} from './notifications.js';
+import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';import {makeNotifications} from './notifications.js';import {igConnect,igSync} from './igwire.js';
 import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ,importQ,imageQ} from './queue.js';import {limit} from './ratelimit.js';import {llmConfig,keyFor} from './keys.js';import {parseCsv} from './csv.js';import {MAX_ROWS} from './importer.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';
 export const api=Router();api.use(requireAuth);
 const wrap=f=>(req,res,next)=>Promise.resolve(f(req,res,next)).catch(next); // Express 4 needs this for async errors
@@ -8,12 +8,12 @@ const pct=(a,b)=>b?+((a-b)/b*100).toFixed(1):0;
 const L30="posted_at>now()-interval '30 days'",P30="posted_at BETWEEN now()-interval '60 days' AND now()-interval '30 days'";
 get('/dashboard',async(req,res)=>{
  const[c]=await q(`SELECT sum(reach) FILTER(WHERE ${L30}) r1,sum(reach) FILTER(WHERE ${P30}) r0,
- sum(likes+comments+saves+shares) FILTER(WHERE ${L30})::float/NULLIF(sum(reach) FILTER(WHERE ${L30}),0) er,
- sum(likes+comments+saves+shares) FILTER(WHERE ${P30})::float/NULLIF(sum(reach) FILTER(WHERE ${P30}),0) er0,
+ sum(coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0)) FILTER(WHERE ${L30})::float/NULLIF(sum(reach) FILTER(WHERE ${L30}),0) er,
+ sum(coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0)) FILTER(WHERE ${P30})::float/NULLIF(sum(reach) FILTER(WHERE ${P30}),0) er0,
  count(*) FILTER(WHERE posted_at>now()-interval '7 days') wk,
  sum(shares) FILTER(WHERE ${L30})::float/NULLIF(sum(reach) FILTER(WHERE ${L30}),0) sr FROM posts WHERE user_id=$1`,[req.uid]);
  res.json({reach:{value:+c.r1||0,changePct:pct(+c.r1,+c.r0)},avgER:{value:+((c.er||0)*100).toFixed(2),changePct:pct(c.er,c.er0)},postsThisWeek:+c.wk,sendsPerReach:+((c.sr||0)*100).toFixed(2)})});
-get('/posts',async(req,res)=>res.json(await q(`SELECT *,round((likes+comments+saves+shares)*100.0/NULLIF(reach,0),2) er FROM posts WHERE user_id=$1 AND ($2::text IS NULL OR type=$2) ORDER BY posted_at DESC LIMIT 200`,[req.uid,req.query.type||null])));
+get('/posts',async(req,res)=>res.json(await q(`SELECT *,round((coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))*100.0/NULLIF(reach,0),2) er FROM posts WHERE user_id=$1 AND ($2::text IS NULL OR type=$2) ORDER BY posted_at DESC LIMIT 200`,[req.uid,req.query.type||null])));
 get('/competitors',async(req,res)=>res.json(await q('SELECT * FROM competitors WHERE user_id=$1 ORDER BY handle',[req.uid])));
 post('/competitors',async(req,res)=>{const h=String(req.body?.handle||'').replace('@','').trim();if(!/^[\w.]{1,30}$/.test(h))return res.status(400).json({error:'bad handle'});
  const[c]=await q('INSERT INTO competitors(user_id,handle) VALUES($1,$2) ON CONFLICT(user_id,handle) DO UPDATE SET handle=$2 RETURNING *',[req.uid,h]);res.json(c)});
@@ -62,16 +62,16 @@ get('/import/jobs/:id',async(req,res)=>{const j=await importQ.getJob(req.params.
 get('/import/status',async(req,res)=>{const[c]=await q('SELECT count(*)::int count FROM posts WHERE user_id=$1',[req.uid]),[l]=await q('SELECT source,at,imported,duplicates FROM import_log WHERE user_id=$1 ORDER BY at DESC LIMIT 1',[req.uid]);
  res.json({count:c.count,lastImportAt:l?.at||null,source:l?.source||null,lastResult:l?{imported:l.imported,duplicates:l.duplicates}:null})});
 get('/gdpr/export',async(req,res)=>{const o={};for(const t of['posts','competitors','scrape_audit','hashtag_sets','import_log','notifications'])o[t]=await q(`SELECT * FROM ${t} WHERE user_id=$1`,[req.uid]);
- o.scheduled_posts=await q('SELECT id,caption,platforms,scheduled_at,status,error,published_at FROM scheduled_posts WHERE user_id=$1',[req.uid]);o.api_keys=await q('SELECT name FROM api_keys WHERE user_id=$1',[req.uid]);
+ o.ig_accounts=await q('SELECT user_id,ig_user_id,page_id,username,account_type,scopes,token_expires_at,status,followers_at_connect,last_sync_at,last_error,connected_at FROM ig_accounts WHERE user_id=$1',[req.uid]);o.scheduled_posts=await q('SELECT id,caption,platforms,scheduled_at,status,error,published_at FROM scheduled_posts WHERE user_id=$1',[req.uid]);o.api_keys=await q('SELECT name FROM api_keys WHERE user_id=$1',[req.uid]);
  o.post_snapshots=await q('SELECT s.* FROM post_snapshots s JOIN posts p ON p.id=s.post_id WHERE p.user_id=$1 ORDER BY s.post_id,s.captured_at',[req.uid]);o.metrics_baseline=await q('SELECT * FROM metrics_baseline WHERE user_id=$1',[req.uid]);res.json(o)});
 del('/gdpr/account',async(req,res)=>{await q('DELETE FROM users WHERE id=$1',[req.uid]);res.json({deleted:true})});
 /* analytics */
 const patch=(p,...f)=>api.patch(p,...hs(f));
-get('/analytics/heatmap',async(req,res)=>res.json(await q(`SELECT extract(dow from posted_at)::int d,extract(hour from posted_at)::int h,round(avg((likes+comments+saves+shares)*100.0/NULLIF(reach,0)),2)::float er,count(*)::int n FROM posts WHERE user_id=$1 GROUP BY 1,2`,[req.uid])));
-get('/analytics/types',async(req,res)=>res.json(await q(`SELECT type,count(*)::int n,round(avg((likes+comments+saves+shares)*100.0/NULLIF(reach,0)),2)::float er,round(avg(reach))::int reach FROM posts WHERE user_id=$1 GROUP BY type ORDER BY er DESC`,[req.uid])));
+get('/analytics/heatmap',async(req,res)=>res.json(await q(`SELECT extract(dow from posted_at)::int d,extract(hour from posted_at)::int h,round(avg((coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))*100.0/NULLIF(reach,0)),2)::float er,count(*)::int n FROM posts WHERE user_id=$1 GROUP BY 1,2`,[req.uid])));
+get('/analytics/types',async(req,res)=>res.json(await q(`SELECT type,count(*)::int n,round(avg((coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))*100.0/NULLIF(reach,0)),2)::float er,round(avg(reach))::int reach FROM posts WHERE user_id=$1 GROUP BY type ORDER BY er DESC`,[req.uid])));
 get('/analytics/insights',async(req,res)=>{
- const t=await q(`SELECT type,round(avg((likes+comments+saves+shares)*100.0/NULLIF(reach,0)),2)::float er,round(avg(reach))::int reach FROM posts WHERE user_id=$1 GROUP BY type ORDER BY er DESC`,[req.uid]);
- const[b]=await q(`SELECT extract(dow from posted_at)::int d,extract(hour from posted_at)::int h,round(avg((likes+comments+saves+shares)*100.0/NULLIF(reach,0)),2)::float er FROM posts WHERE user_id=$1 GROUP BY 1,2 HAVING count(*)>=2 ORDER BY er DESC LIMIT 1`,[req.uid]);
+ const t=await q(`SELECT type,round(avg((coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))*100.0/NULLIF(reach,0)),2)::float er,round(avg(reach))::int reach FROM posts WHERE user_id=$1 GROUP BY type ORDER BY er DESC`,[req.uid]);
+ const[b]=await q(`SELECT extract(dow from posted_at)::int d,extract(hour from posted_at)::int h,round(avg((coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))*100.0/NULLIF(reach,0)),2)::float er FROM posts WHERE user_id=$1 GROUP BY 1,2 HAVING count(*)>=2 ORDER BY er DESC LIMIT 1`,[req.uid]);
  const D=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'],out=[];
  if(t.length>1){const a=t[0],z=t.at(-1);out.push(`${a.type} posts earn ${a.er}% ER vs ${z.er}% for ${z.type} — shift more posts to ${a.type}.`);const r=[...t].sort((x,y)=>y.reach-x.reach)[0];out.push(`${r.type} has the highest avg reach (${r.reach}).`)}
  if(b)out.push(`Your best slot is ${D[b.d]} ${b.h}:00 (${b.er}% avg ER).`);
@@ -93,3 +93,7 @@ const ins=makeInsights({q,pageMetrics});get('/priorities',ins.priorities);get('/
 /* Phase 2: per-post analysis (2.2) and notifications (2.3). Handlers live in insights.js / notifications.js */
 get('/posts/:id/analysis',ins.postAnalysis);
 const nt=makeNotifications({q});get('/notifications',nt.list);api.patch('/notifications/read-all',wrap(nt.markAll));api.patch('/notifications/:id',wrap(nt.mark));del('/notifications/:id',nt.remove);
+
+/* Phase A.1a/b: Instagram connection + sync. The OAuth callback is public and lives in server.js (the browser has no bearer token there). */
+get('/instagram/connect/start',igConnect.start);get('/instagram/status',igConnect.status);del('/instagram/disconnect',igConnect.disconnect);
+post('/instagram/sync',igSync.requestSync);get('/instagram/sync/:jobId',igSync.jobStatus);

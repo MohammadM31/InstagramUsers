@@ -31,3 +31,15 @@ CREATE TABLE IF NOT EXISTS metrics_baseline(user_id uuid PRIMARY KEY REFERENCES 
 ALTER TABLE metrics_baseline ADD COLUMN IF NOT EXISTS ahead text[]; -- competitors that were already ahead of the user when baselined (NULL = not baselined yet)
 CREATE TABLE IF NOT EXISTS notifications(id serial PRIMARY KEY,user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,kind text NOT NULL,title text NOT NULL,body text NOT NULL,watch text,dedupe_key text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),read_at timestamptz,UNIQUE(user_id,dedupe_key));
 CREATE INDEX IF NOT EXISTS notifications_user_time ON notifications(user_id,created_at DESC);
+
+-- ===== Phase A.1 (idempotent) =====
+-- A.1a one Instagram account per user (decision D4: a separate table so more can be allowed later). The access token is NOT here:
+-- it stays encrypted in api_keys under the name 'instagram'.
+CREATE TABLE IF NOT EXISTS ig_accounts(user_id uuid PRIMARY KEY REFERENCES users ON DELETE CASCADE,ig_user_id text NOT NULL,page_id text,username text,account_type text,scopes text[] DEFAULT '{}',token_expires_at timestamptz,status text NOT NULL DEFAULT 'connected' CHECK (status IN ('connected','reconnect_needed','disconnected')),followers_at_connect int,last_sync_at timestamptz,last_error text,connected_at timestamptz NOT NULL DEFAULT now());
+-- A.1b posts gain Instagram identity + the metrics the API adds. Unavailable metrics stay NULL (never rejected, never faked as 0).
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS ig_media_id text;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS permalink text;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS thumbnail_url text;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS views int;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS media_product_type text;
+CREATE UNIQUE INDEX IF NOT EXISTS posts_ig_media ON posts(user_id,ig_media_id) WHERE ig_media_id IS NOT NULL;

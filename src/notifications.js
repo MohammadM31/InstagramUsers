@@ -6,8 +6,8 @@ import { detectAlerts } from './advisor.js';
 const W30 = "posted_at>now()-interval '30 days'";
 const USERS_SQL = `SELECT b.user_id, b.reach30d AS b_reach, b.er AS b_er, b.best_post_er AS b_best, b.ahead AS b_ahead,
     coalesce(sum(p.reach) FILTER (WHERE p.${W30}),0)::int AS reach30d,
-    round((sum(p.likes+p.comments+p.saves+p.shares) FILTER (WHERE p.${W30}))*100.0 / NULLIF(sum(p.reach) FILTER (WHERE p.${W30}),0),2) AS er,
-    round(max((p.likes+p.comments+p.saves+p.shares)*100.0/NULLIF(p.reach,0)),2) AS best_post_er,
+    round((sum(coalesce(p.likes,0)+coalesce(p.comments,0)+coalesce(p.saves,0)+coalesce(p.shares,0)) FILTER (WHERE p.${W30}))*100.0 / NULLIF(sum(p.reach) FILTER (WHERE p.${W30}),0),2) AS er,
+    round(max((coalesce(p.likes,0)+coalesce(p.comments,0)+coalesce(p.saves,0)+coalesce(p.shares,0))*100.0/NULLIF(p.reach,0)),2) AS best_post_er,
     avg(p.likes+p.comments) FILTER (WHERE p.${W30}) AS user_avg_lc
   FROM metrics_baseline b LEFT JOIN posts p ON p.user_id=b.user_id
   GROUP BY b.user_id`;

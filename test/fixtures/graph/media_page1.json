@@ -1,0 +1,5 @@
+{"data":[
+ {"id":"M3","timestamp":"2026-10-14T09:30:00+0000","media_type":"VIDEO","media_product_type":"REELS","caption":"New reel","permalink":"https://www.instagram.com/reel/M3/","thumbnail_url":"https://cdn.example/m3.jpg","like_count":120,"comments_count":9},
+ {"id":"M2","timestamp":"2026-10-13T16:00:00+0000","media_type":"IMAGE","media_product_type":"FEED","caption":"Fresh batch","permalink":"https://www.instagram.com/p/M2/","like_count":80,"comments_count":4},
+ {"id":"S1","timestamp":"2026-10-13T08:00:00+0000","media_type":"IMAGE","media_product_type":"STORY","caption":"","permalink":"https://www.instagram.com/stories/x/S1/","like_count":0,"comments_count":0}],
+ "paging":{"cursors":{"after":"CUR1"},"next":"https://graph.facebook.com/next1"}}

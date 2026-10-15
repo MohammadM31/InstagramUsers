@@ -5,7 +5,7 @@ import { advise, health, financePlan } from './advisor.js';
 import { llmConfig } from './keys.js';
 import { hit } from './ratelimit.js';
 
-const ER = '(likes+comments+saves+shares)';
+const ER = '(coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))';
 const L30 = "posted_at>now()-interval '30 days'";
 const P30 = "posted_at BETWEEN now()-interval '60 days' AND now()-interval '30 days'";
 const pct = (a, b) => (b ? +(((a - b) / b) * 100).toFixed(1) : 0);
