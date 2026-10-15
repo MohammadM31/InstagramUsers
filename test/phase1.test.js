@@ -69,6 +69,7 @@ const fakeQ = async sql => {
   if (/FROM competitor_posts/.test(sql)) return [{ n: 0 }];
   if (/FROM post_snapshots/.test(sql)) return [{ n: 0, last_at: null, days: 0 }];
   if (/FROM scrape_audit/.test(sql)) return [];
+  if (/FROM priority_dismissals/.test(sql)) return []; // A.1d
   throw new Error('unexpected SQL: ' + sql.slice(0, 60));
 };
 test('1.1/1.2/1.4 handlers return the documented shapes', async () => {

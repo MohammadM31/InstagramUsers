@@ -3,6 +3,20 @@
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const isReel = t => /^reel/i.test(String(t ?? '')); // the DB stores 'REEL'; older tests used 'reel'
 
+// Roadmap A.1c. m.followerSeries = [{ day:'YYYY-MM-DD', followers, source }] oldest first (from follower_history).
+// A window (7 or 30 days) is reported only when a point at or before that distance exists; otherwise it is null, never guessed.
+export function followerGrowth(m) {
+  const s = (m?.followerSeries || []).filter(x => Number.isFinite(x.followers) && x.day).sort((a, b) => a.day.localeCompare(b.day));
+  const none = { hasData: false, followers: null, value30d: null, value7d: null, pct30d: null, pct7d: null, direction: null, reconstructed: false };
+  if (!s.length) return none;
+  const last = s[s.length - 1], t = Date.parse(last.day + 'T00:00:00Z');
+  const ref = n => [...s].reverse().find(x => Date.parse(x.day + 'T00:00:00Z') <= t - n * 864e5);
+  const win = n => { const r = ref(n); return r ? { v: last.followers - r.followers, p: r.followers > 0 ? +(((last.followers - r.followers) / r.followers) * 100).toFixed(1) : null, rec: r.source === 'reconstructed' } : null; };
+  const a = win(30), b = win(7), lead = b ?? a;
+  return { hasData: true, followers: last.followers, value30d: a ? a.v : null, value7d: b ? b.v : null, pct30d: a ? a.p : null, pct7d: b ? b.p : null,
+    direction: !lead || lead.p === null ? null : lead.p > 0 ? 'up' : lead.p < 0 ? 'down' : 'flat', reconstructed: !!(a?.rec || b?.rec) };
+}
+
 // Non-technical growth levers (collabs, mentions, reshares, giveaways) rank ABOVE hashtags and new content.
 // Every tip carries `why` (the metric that triggered it) and `watch` (the metric to check afterwards).
 // Collab/mention counts are ESTIMATES (caption text), and "growth" is reach change, not followers.
@@ -10,11 +24,19 @@ export function advise(m) {
   if (!m.hasData) return [{ priority: 10, kind: 'start', text: 'No posts yet. Import posts or seed demo data so I can read your page.', why: 'No posts are stored for this account.', watch: 'Number of posts imported' }];
   const tips = [];
   const add = (priority, kind, text, why, watch) => tips.push({ priority, kind, text, why, watch });
+  // Growth = follower change over 30 days when Instagram history exists, reach change otherwise (A.1c). The follower thresholds are my choice (see AI_DECISIONS).
+  const fg = followerGrowth(m), useF = fg.pct30d !== null;
+  const growth = useF ? fg.pct30d : m.reachChange, basis = useF ? 'followers' : 'reach';
+  const growthTxt = useF ? `followers changed ${fg.pct30d}% over 30 days` : `reach changed ${m.reachChange}% vs the previous 30 days`;
+  if (fg.pct7d !== null && fg.pct7d < -1)
+    add(11, 'follower_drop', `Followers fell ${Math.abs(fg.pct7d)}% in 7 days (${fg.value7d}). Check what you posted just before the drop, and reply to comments and messages today.`,
+      `Followers went from ${fg.followers - fg.value7d} to ${fg.followers} in 7 days (Instagram follower count).${fg.reconstructed ? ' Part of this history is reconstructed from daily changes.' : ''} This shows a change, not its cause.`,
+      'Follower change over the next 7 days');
 
-  if (m.collabs30d < 2 && m.reachChange < 5)
+  if (m.collabs30d < 2 && growth < (useF ? 2 : 5))
     add(10, 'collab', 'Run a Collab post with a page of similar size. Shared audiences are your fastest reach boost right now.',
-      `About ${m.collabs30d} collab-style post(s) in the last 30 days (estimated from caption wording) and reach changed ${m.reachChange}% vs the previous 30 days.`,
-      'Reach of the collab post vs your average post');
+      `About ${m.collabs30d} collab-style post(s) in the last 30 days (estimated from caption wording) and ${growthTxt}.`,
+      useF ? 'Followers gained after the collab post' : 'Reach of the collab post vs your average post');
   if (m.mentions30d < 5)
     add(9, 'mention', 'Mention and tag partners, customers or local creators, and ask them to reshare to their Stories. Reshares beat hashtags.',
       `${m.mentions30d} post(s) with an @mention in the last 30 days (estimated from captions).`,
@@ -23,10 +45,10 @@ export function advise(m) {
     add(8, 'community', 'Reply to every comment and DM in the first hour after posting. Early replies lift reach.',
       `Engagement rate is ${m.er}%, below the 3% mark.`,
       'Comments per post and engagement rate within 24h of posting');
-  if (m.reachChange < 0)
-    add(7, 'giveaway', 'Reach is down. Try a partner giveaway: follow both pages, tag a friend, share to Stories.',
-      `Reach is ${m.reachChange}% vs the previous 30 days.`,
-      'Reach change vs the previous 30 days');
+  if (growth < 0)
+    add(7, 'giveaway', `${useF ? 'Followers are' : 'Reach is'} down. Try a partner giveaway: follow both pages, tag a friend, share to Stories.`,
+      useF ? `Followers changed ${fg.pct30d}% over 30 days (Instagram follower count).` : `Reach is ${m.reachChange}% vs the previous 30 days.`,
+      useF ? 'Follower change over 30 days' : 'Reach change vs the previous 30 days');
   if (m.topCompetitor)
     add(6, 'swap', `Look at who @${m.topCompetitor} collaborates with. Pitch those creators for a shoutout swap or a joint Live.`,
       `@${m.topCompetitor} is the largest competitor you track.`,
@@ -132,7 +154,10 @@ export function contextGaps(m, s) {
   if (s.competitorSource === 'demo') gaps.push('Competitor data is synthetic demo data (no Instagram Graph API token configured).');
   if (!s.snapshotDays) gaps.push('No daily snapshots yet. Trends and notifications need a few days of history.');
   else if (s.snapshotDays < 3) gaps.push(`Only ${s.snapshotDays} day(s) of snapshots. Monitoring needs at least 3.`);
-  gaps.push('Collabs and mentions are estimated from caption text, and growth is reach change, not followers.');
+  if (s.igConnected && s.followersAtLastSync !== undefined && s.followersAtLastSync !== null && s.followersAtLastSync < 100)
+    gaps.push('Under 100 followers: Instagram withholds follower history, audience and online-time data until the account passes 100.');
+  if (followerGrowth(m).pct30d !== null) gaps.push('Collabs and mentions are estimated from caption text. Growth is follower count (Instagram Insights).');
+  else gaps.push('Collabs and mentions are estimated from caption text, and growth is reach change, not followers.');
   return gaps;
 }
 

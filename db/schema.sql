@@ -43,3 +43,21 @@ ALTER TABLE posts ADD COLUMN IF NOT EXISTS thumbnail_url text;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS views int;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS media_product_type text;
 CREATE UNIQUE INDEX IF NOT EXISTS posts_ig_media ON posts(user_id,ig_media_id) WHERE ig_media_id IS NOT NULL;
+
+-- ===== Phase A.1c / A.1d (idempotent) =====
+-- A.1d: Meta's deauthorize and data-deletion callbacks identify a person only by their Facebook user id, so the account row keeps it.
+ALTER TABLE ig_accounts ADD COLUMN IF NOT EXISTS fb_user_id text;
+CREATE INDEX IF NOT EXISTS ig_accounts_fb_user ON ig_accounts(fb_user_id) WHERE fb_user_id IS NOT NULL;
+-- A.1c follower history: one row per user per UTC day. followers = total that day; net_new = Instagram's daily follower_count (NULL under 100 followers).
+-- source: 'live' (read from the profile at sync time) or 'reconstructed' (walked back from today's total using the daily net change).
+CREATE TABLE IF NOT EXISTS follower_history(id serial PRIMARY KEY,user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,captured_at timestamptz NOT NULL DEFAULT now(),followers int,net_new int,source text NOT NULL DEFAULT 'live');
+CREATE UNIQUE INDEX IF NOT EXISTS follower_history_day ON follower_history(user_id,((captured_at AT TIME ZONE 'UTC')::date));
+-- A.1c account-level daily numbers (unavailable = NULL, never 0)
+CREATE TABLE IF NOT EXISTS ig_account_daily(user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,day date NOT NULL,reach int,views int,accounts_engaged int,profile_links_taps int,follows int,unfollows int,UNIQUE(user_id,day));
+-- A.1c weekly audience snapshot (needs 100+ followers)
+CREATE TABLE IF NOT EXISTS ig_audience(id serial PRIMARY KEY,user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,captured_at timestamptz NOT NULL DEFAULT now(),demographics jsonb,online_followers jsonb);
+CREATE UNIQUE INDEX IF NOT EXISTS ig_audience_week ON ig_audience(user_id,((date_trunc('week',captured_at AT TIME ZONE 'UTC'))::date));
+-- A.1d persisted Dismiss for Today's Priorities (key = the tip kind). Hidden until `until`.
+CREATE TABLE IF NOT EXISTS priority_dismissals(user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,tip_key text NOT NULL,until timestamptz NOT NULL,PRIMARY KEY(user_id,tip_key));
+-- A.1d data-deletion requests from Meta. Only a hash of the Facebook user id is stored, never the id itself, and no user_id (the user's rows are gone).
+CREATE TABLE IF NOT EXISTS ig_deletion_requests(code text PRIMARY KEY,fb_hash text NOT NULL,status text NOT NULL,detail text,requested_at timestamptz NOT NULL DEFAULT now());

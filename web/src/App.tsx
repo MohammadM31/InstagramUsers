@@ -13,13 +13,18 @@ import Finance from './pages/Finance';
 import Assistant from './Assistant';
 import Notifications from './Notifications';
 import {ICONS} from './icons';
+import {IgBadge} from './pages/InstagramCard';
+import {parseIgRedirect} from './ig';
+
+const IGR=parseIgRedirect(); // /?ig=connected|error&reason=... after the Instagram login (A.1d); read once at load
 
 const PAGES:Record<string,ComponentType>={Dashboard,Statistics:Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,'Finance & Capital':Finance,Settings,Roadmap};
 
 export default function App(){
-  const[t,setT]=useState(tok()),[p,setP]=useState('Dashboard'),[open,setOpen]=useState(false),
+  const[t,setT]=useState(tok()),[p,setP]=useState(IGR?'Settings':'Dashboard'),[igMsg,setIgMsg]=useState(IGR),[open,setOpen]=useState(false),
     [dk,setDk]=useState(()=>localStorage.getItem('theme')?localStorage.getItem('theme')==='dark':matchMedia('(prefers-color-scheme:dark)').matches);
   useEffect(()=>{document.documentElement.dataset.theme=dk?'dark':'light';localStorage.setItem('theme',dk?'dark':'light')},[dk]);
+  useEffect(()=>{if(IGR)history.replaceState(null,'',location.pathname)},[]);
   useEffect(()=>{const k=(e:KeyboardEvent)=>e.key==='Escape'&&setOpen(false);addEventListener('keydown',k);return()=>removeEventListener('keydown',k)},[]);
   if(!t)return <Login onAuth={()=>setT(tok())}/>;
   const P=PAGES[p];
@@ -39,8 +44,9 @@ export default function App(){
       <header className="top">
         <span className="wm">RaidTechs</span>
         <span className="mu">{p}</span>
-        <span style={{marginLeft:'auto'}}><Notifications/></span>
+        <span style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}><IgBadge onClick={()=>setP('Settings')}/><Notifications/></span>
       </header>
+      {igMsg&&<div className={'banner '+(igMsg.ok?'ok':'bad')} role="status"><span>{igMsg.text}</span><button className="btn g s" onClick={()=>setIgMsg(null)}>Close</button></div>}
       <P/>
     </main>
     <Assistant/>

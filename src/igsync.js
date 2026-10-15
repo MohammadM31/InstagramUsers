@@ -73,7 +73,7 @@ export const INSERT_SQL = `INSERT INTO posts(user_id,ig_media_id,likes,comments,
 const params = (uid, r) => [uid, r.ig_media_id, r.likes, r.comments, r.saves, r.shares, r.reach, r.views, r.watch_s, r.permalink, r.thumbnail_url, r.media_product_type, r.caption, r.type, r.posted_at];
 
 // deps: q, graph, getIgCreds, afterSync (e.g. runSnapshots), now
-export function makeIgSync({ q, graph, getIgCreds, afterSync = async () => {}, hit, enqueue, getJob, now = () => Date.now() }) {
+export function makeIgSync({ q, graph, getIgCreds, afterSync = async () => {}, hit, enqueue, getJob, account = null, now = () => Date.now() }) {
   async function insightsFor(token, m) {
     const ladder = INSIGHT_LADDER[mediaType(m) === 'REEL' ? 'REEL' : 'FEED'];
     for (const metrics of ladder) {
@@ -129,7 +129,16 @@ export function makeIgSync({ q, graph, getIgCreds, afterSync = async () => {}, h
       }
       throw e;
     }
-    const warn = res.stoppedEarly || (res.fetched && res.noInsights === res.fetched ? 'Instagram returned no insights for any post (check permissions or account age)' : null);
+    // A.1c: account-level data. Any problem becomes a warning; the posts above are already stored.
+    const accountNotes = [];
+    if (account && !res.stoppedEarly) {
+      try { res.account = await account.sync(uid, creds); accountNotes.push(...res.account.notes); }
+      catch (e) {
+        if (creds.source === 'oauth' && e instanceof IgError && e.tokenInvalid) await markReconnect(q, uid, e.message);
+        accountNotes.push('Account data skipped: ' + e.message);
+      }
+    }
+    const warn = [res.stoppedEarly || (res.fetched && res.noInsights === res.fetched ? 'Instagram returned no insights for any post (check permissions or account age)' : null), ...accountNotes].filter(Boolean).join('; ') || null;
     if (creds.source === 'oauth') await q('UPDATE ig_accounts SET last_sync_at=now(),last_error=$2 WHERE user_id=$1', [uid, warn]);
     await afterSync(); // snapshots: idempotent per post per UTC day
     return res;

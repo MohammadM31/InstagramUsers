@@ -10,6 +10,9 @@ import { runSnapshots } from './snapshots.js';
 import { makeGraph } from './instagram.js';
 import { makeIgConnect, makeIgCreds, makeRedisState } from './igconnect.js';
 import { makeIgSync } from './igsync.js';
+import { makeIgAccount } from './igaccount.js';
+import { makeCompliance } from './igcompliance.js';
+import { makeDismissals } from './dismissals.js';
 
 export const graph = makeGraph();
 export const keys = {
@@ -20,8 +23,10 @@ export const keys = {
 export const getIgCreds = makeIgCreds({ q, keys });
 export const igConnect = makeIgConnect({ q, graph, state: makeRedisState(redis), keys });
 export const igSync = makeIgSync({
-  q, graph, getIgCreds, hit,
+  q, graph, getIgCreds, hit, account: makeIgAccount({ q, graph }),
   afterSync: () => runSnapshots(q),
   enqueue: async uid => (await igsyncQ.add('igsync', { userId: uid }, { attempts: 1 })).id,
   getJob: id => igsyncQ.getJob(id),
 });
+export const compliance = makeCompliance({ q, keys });
+export const dismissals = makeDismissals({ q });

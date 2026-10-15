@@ -174,7 +174,7 @@ test('A.1a status never contains the token and reports expiry, source and state'
 test('A.1a disconnect: removes the token, marks disconnected; data=delete also removes Instagram-linked posts; bad value 400', async () => {
   const t = build({ rows: sql => (/DELETE FROM posts/.test(sql) ? [{ id: 1 }, { id: 2 }] : []) }); t.keys.m.set('u1instagram', 'X');
   const keep = res(); await t.ic.disconnect({ uid: 'u1', query: {} }, keep);
-  assert.deepEqual(keep.body, { ok: true, data: 'keep', postsDeleted: 0 });
+  assert.deepEqual(keep.body, { ok: true, data: 'keep', postsDeleted: 0, accountRowsDeleted: 0 }); // accountRowsDeleted added in A.1c (additive)
   assert.ok(!t.keys.m.has('u1instagram'));
   assert.ok(t.q.calls.some(c => /status='disconnected'/.test(c.sql)));
   assert.ok(!t.q.calls.some(c => /DELETE FROM posts/.test(c.sql)));

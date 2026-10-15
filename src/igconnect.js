@@ -86,11 +86,12 @@ export function makeIgConnect({ q, graph, state, keys, env = process.env, now = 
       const granted = await grantedScopes(graph, token).catch(() => []);
       const lacking = missingScopes(granted);
       if (granted.length && lacking.length) throw new ConnectError('missing_permissions', lacking);
+      const fbUser = (await graph.get('me', { fields: 'id' }, token).catch(() => null))?.id ?? null; // identifies the person in Meta's deauthorize / deletion callbacks
       await keys.set(uid, 'instagram', token);
-      await q(`INSERT INTO ig_accounts(user_id,ig_user_id,page_id,username,account_type,scopes,token_expires_at,status,followers_at_connect,last_error,connected_at)
-        VALUES($1,$2,$3,$4,'professional',$5,$6,'connected',$7,NULL,now())
-        ON CONFLICT(user_id) DO UPDATE SET ig_user_id=$2,page_id=$3,username=$4,scopes=$5,token_expires_at=$6,status='connected',followers_at_connect=$7,last_error=NULL,connected_at=now()`,
-        [uid, acct.igUserId, acct.pageId, acct.username, granted, expiryFrom(long.expires_in, now()), acct.followers]);
+      await q(`INSERT INTO ig_accounts(user_id,ig_user_id,page_id,username,account_type,scopes,token_expires_at,status,followers_at_connect,last_error,connected_at,fb_user_id)
+        VALUES($1,$2,$3,$4,'professional',$5,$6,'connected',$7,NULL,now(),$8)
+        ON CONFLICT(user_id) DO UPDATE SET ig_user_id=$2,page_id=$3,username=$4,scopes=$5,token_expires_at=$6,status='connected',followers_at_connect=$7,last_error=NULL,connected_at=now(),fb_user_id=coalesce($8,ig_accounts.fb_user_id)`,
+        [uid, acct.igUserId, acct.pageId, acct.username, granted, expiryFrom(long.expires_in, now()), acct.followers, fbUser]);
       back(null);
     } catch (e) {
       if (!(e instanceof ConnectError)) console.error('ig connect', e.message);
@@ -102,7 +103,9 @@ export function makeIgConnect({ q, graph, state, keys, env = process.env, now = 
   const status = async (req, res) => {
     const [a] = await q('SELECT * FROM ig_accounts WHERE user_id=$1', [req.uid]);
     const envOnly = !a && !!(env.IG_ACCESS_TOKEN && env.IG_USER_ID);
+    const [f] = a ? await q(`SELECT count(*)::int points, max(captured_at) last_at, (array_agg(followers ORDER BY captured_at DESC))[1] AS followers, (array_agg(source ORDER BY captured_at DESC))[1] AS source FROM follower_history WHERE user_id=$1 AND followers IS NOT NULL`, [req.uid]) : [];
     res.json({
+      followers: f?.followers ?? null, followerPoints: f?.points ?? 0, lastFollowerAt: f?.last_at ?? null, followerSource: f?.source ?? null, // A.1c (additive)
       configured: !!cfg(),
       connected: a?.status === 'connected',
       status: a?.status || (envOnly ? 'dev_env' : 'not_connected'),
@@ -124,8 +127,12 @@ export function makeIgConnect({ q, graph, state, keys, env = process.env, now = 
     await keys.del(req.uid, 'instagram');
     await q(`UPDATE ig_accounts SET status='disconnected',last_error=NULL,token_expires_at=NULL WHERE user_id=$1`, [req.uid]);
     let purged = 0;
-    if (mode === 'delete') purged = (await q('DELETE FROM posts WHERE user_id=$1 AND ig_media_id IS NOT NULL RETURNING id', [req.uid])).length;
-    res.json({ ok: true, data: mode, postsDeleted: purged });
+    let accountRows = 0;
+    if (mode === 'delete') {
+      purged = (await q('DELETE FROM posts WHERE user_id=$1 AND ig_media_id IS NOT NULL RETURNING id', [req.uid])).length;
+      for (const t of ['follower_history', 'ig_account_daily', 'ig_audience']) accountRows += (await q(`DELETE FROM ${t} WHERE user_id=$1 RETURNING 1 AS x`, [req.uid])).length; // A.1c tables
+    }
+    res.json({ ok: true, data: mode, postsDeleted: purged, accountRowsDeleted: accountRows });
   };
 
   // Daily job (run every few hours; it only acts on tokens with under 15 days left, so repeating is harmless).

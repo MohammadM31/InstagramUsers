@@ -6,7 +6,9 @@ export function makeInsights({ q, pageMetrics }) {
   // 1.1 GET /api/priorities: the ranked tips, each with why + watch (see advisor.advise)
   const priorities = async (req, res) => {
     const m = await pageMetrics(req.uid);
-    res.json({ updatedAt: new Date().toISOString(), priorities: advise(m) });
+    const snoozed = await q('SELECT tip_key AS key, until FROM priority_dismissals WHERE user_id=$1 AND until>now() ORDER BY until', [req.uid]); // A.1d
+    const hide = new Set(snoozed.map(x => x.key));
+    res.json({ updatedAt: new Date().toISOString(), priorities: advise(m).filter(t => !hide.has(t.kind)), snoozed });
   };
 
   // 1.2 GET /api/ai/context: what the AI is looking at, how fresh it is, and what is missing

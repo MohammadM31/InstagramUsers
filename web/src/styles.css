@@ -249,3 +249,10 @@
     .docked-bottom{bottom:72px}
   }
   
+    /* A.1d: Instagram connection badge and result banner */
+    .igbadge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--bd);background:var(--soft);color:var(--tx);border-radius:999px;padding:4px 10px;font:600 12px var(--font);cursor:pointer}
+    .igbadge .igdot{width:8px;height:8px;border-radius:50%;background:var(--mu);display:inline-block}
+    .igbadge.on .igdot{background:var(--up)}.igbadge.bad{border-color:var(--dn);color:var(--dn)}.igbadge.bad .igdot{background:var(--dn)}
+    .banner{display:flex;gap:12px;align-items:center;justify-content:space-between;margin:0 0 12px;padding:10px 14px;border-radius:8px;border:1px solid var(--bd);background:var(--soft)}
+    .banner.ok{border-color:var(--up)}.banner.bad{border-color:var(--dn)}
+    .undo{display:flex;gap:8px;align-items:center;margin:6px 0}
