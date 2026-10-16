@@ -2,7 +2,7 @@
 import {useCallback,useEffect,useState} from 'react';
 import {api,useQ} from '../api';
 import {St,Card} from '../ui';
-import {IgStatus,igChanged,igAgo} from '../ig';
+import {IgStatus,igChanged,igAgo,syncMessage} from '../ig';
 
 export function IgBadge({onClick}:{onClick:()=>void}){
   const[s,setS]=useState<IgStatus|null>(null);
@@ -20,7 +20,7 @@ export default function InstagramCard(){
   const sync=async()=>{setBz('sync');setMsg('');
     try{const{jobId}=await api<{jobId:string}>('/instagram/sync',{method:'POST'});
       for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,1500));const j=await api<any>('/instagram/sync/'+jobId);
-        if(j.status==='done'){setMsg(`Synced: ${j.fetched} posts checked (${j.inserted} new, ${(j.updated||0)+(j.linked||0)} updated)${j.account?.followers!=null?`, ${j.account.followers.toLocaleString()} followers`:''}.${j.stoppedEarly?' '+j.stoppedEarly+'.':''}`);break}
+        if(j.status==='done'){setMsg(syncMessage(j));break}
         if(j.status==='failed'){setMsg('⚠ '+j.error);break}
         if(i===39)setMsg('Still syncing in the background. Check again in a minute.')}
     }catch(e:any){setMsg('⚠ '+e.message)}

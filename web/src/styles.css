@@ -265,3 +265,8 @@
 .obdots i{width:28px;height:4px;border-radius:2px;background:var(--bd)}
 .obdots i.done{background:var(--mu)}
 .obdots i.on{background:var(--ac)}
+/* O.2: connect step */
+.obreq{margin:6px 0 10px;padding-left:20px;display:grid;gap:4px}
+.prog{height:6px;border-radius:3px;background:var(--bd);overflow:hidden;margin:0 0 10px}
+.prog i{display:block;height:100%;width:35%;border-radius:3px;background:var(--ig,#e1306c);animation:progmove 1.3s ease-in-out infinite}
+@keyframes progmove{0%{margin-left:-35%}100%{margin-left:100%}}

@@ -85,3 +85,10 @@ The PDF report asked for six decisions and said its defaults apply if the user j
 49. The wizard's voice step is a placeholder (O.3 not built). Skipping it records "skipped" on the server so O.3 can offer it again; Settings (O.6) will be the place to set it later.
 50. The wizard pre-fills time zone from the browser and language "en" as suggestions only; nothing is saved until the user presses Continue.
 51. test/onboardingUi.test.js imports a .ts file, which needs Node 22.18+ (the user runs 24.19). On older Node those 7 tests are reported as skipped, not failed.
+
+## 2026-10-16 - O.2 (session 6)
+52. PROPOSED, needs your confirmation (changes data-model shape): the roadmap's "skip with @handle only" has nowhere to be stored today (connect owns no profile fields, decision 45). Smallest change: one nullable text column `business_profile.ig_handle` (validated as an Instagram username, owned by step `connect`). Until you confirm, the connect step offers only "skip" and "import a CSV instead", and the Dashboard says plainly that it has no live data. An @handle alone cannot fetch anything (no Instagram data without the person's own connection), so it would be a label for later steps, not live data.
+53. The permission list and the failure fixes shown in the wizard live in web/src/ig.ts and are tested against the server's IG_SCOPES and CONNECT_ERRORS, so a new scope or error code that is not described in the UI fails a test.
+54. The first sync starts by itself, once, when the connect step opens for an account that is connected and has never synced. It uses the normal 5-minute per-user cooldown, so a refresh cannot trigger repeated pulls.
+55. The ok message from the redirect is not shown in the wizard (it told people to press Sync now, which the step now does for them); error messages are shown with their code-specific fix.
+

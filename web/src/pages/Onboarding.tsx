@@ -1,10 +1,10 @@
 // Roadmap O.1: first-run setup wizard. Shown by App.tsx until the server says completed. Every step saves on Continue, so a reload resumes where the user stopped.
-// Steps 'connect' (O.2) reuses the Instagram card; 'voice' (O.3) is a placeholder that is marked skipped so it is offered again once it exists.
+// Step 'connect' (O.2) is ConnectStep; 'voice' (O.3) is a placeholder that is marked skipped so it is offered again once it exists.
 import {useEffect,useState} from 'react';
 import {api} from '../api';
 import {STEPS,TITLES,FIELDS,toForm,toPayload,startIndex,detectedZone} from '../onb';
 import type {StepKey,Form,Field} from '../onb';
-import InstagramCard from './InstagramCard';
+import ConnectStep from './ConnectStep';
 
 type Ob={profile:Record<string,any>;step:string;skippedSteps:string[];completed:boolean};
 
@@ -17,7 +17,7 @@ function Input({f,v,set}:{f:Field;v:string|boolean;set:(x:string|boolean)=>void}
      :<input type={f.kind==='num'?'number':f.kind==='date'?'date':'text'} {...common}/>}
     {f.hint&&<span className="mu">{f.hint}</span>}</label>}
 
-export default function Onboarding({onDone,igMsg}:{onDone:()=>void;igMsg?:{ok:boolean;text:string}|null}){
+export default function Onboarding({onDone,igMsg}:{onDone:()=>void;igMsg?:{ok:boolean;text:string;code?:string}|null}){
   const[ob,setOb]=useState<Ob|null>(null),[i,setI]=useState(0),[form,setForm]=useState<Form>({}),[err,setErr]=useState(''),[bz,setBz]=useState(false),[loadErr,setLoadErr]=useState('');
   const step:StepKey=STEPS[i];
   const open=(d:Ob,idx:number)=>{setI(idx);const s=STEPS[idx];const f=toForm(s,d.profile);
@@ -39,9 +39,8 @@ export default function Onboarding({onDone,igMsg}:{onDone:()=>void;igMsg?:{ok:bo
   return <div className="ob">
     <div className="obdots" aria-label={`Step ${i+1} of ${STEPS.length}`}>{STEPS.map((s,k)=><i key={s} className={k===i?'on':k<i?'done':''} title={TITLES[s]}/>)}</div>
     <div className="card"><h3>{TITLES[step]} <span className="mu">· step {i+1} of {STEPS.length}</span></h3>
-      {igMsg&&step==='connect'&&<div className={'banner '+(igMsg.ok?'ok':'bad')} role="status"><span>{igMsg.text}</span></div>}
       {step==='about'&&<p className="mu">Tell us a little so advice fits you. Only your name is required; you can skip everything else and change it later in Settings.</p>}
-      {step==='connect'&&<><p className="mu">Connect your Instagram professional account so the app can use your real numbers. You can skip this and import a CSV instead.</p><InstagramCard/></>}
+      {step==='connect'&&<><p className="mu">Connect your Instagram professional account so the app can use your real numbers. You can skip this and import a CSV instead.</p><ConnectStep igMsg={igMsg}/></>}
       {step==='voice'&&<p className="mu">Brand voice (how your captions should sound) arrives in an upcoming update. You will be able to set it in Settings.</p>}
       {step==='goals'&&<p className="mu">Pick what matters most. The Dashboard will show progress toward it using your real numbers.</p>}
       {FIELDS[step].map(f=><Input key={f.k} f={f} v={form[f.k]} set={x=>setForm(s=>({...s,[f.k]:x}))}/>)}
