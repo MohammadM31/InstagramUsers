@@ -1,4 +1,4 @@
-import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {makeOnboarding} from './onboarding.js';import {makeBrandVoice,currentVoice,captionPrompt,hashtagPrompt} from './brandvoice.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';import {makeNotifications} from './notifications.js';import {igConnect,igSync,dismissals} from './igwire.js';
+import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {makeGoals} from './goals.js';import {makeOnboarding} from './onboarding.js';import {makeBrandVoice,currentVoice,captionPrompt,hashtagPrompt} from './brandvoice.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';import {makeNotifications} from './notifications.js';import {igConnect,igSync,dismissals} from './igwire.js';
 import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ,importQ,imageQ} from './queue.js';import {limit,hit} from './ratelimit.js';import {llmConfig,keyFor} from './keys.js';import {parseCsv} from './csv.js';import {MAX_ROWS} from './importer.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';
 export const api=Router();api.use(requireAuth);
 const wrap=f=>(req,res,next)=>Promise.resolve(f(req,res,next)).catch(next); // Express 4 needs this for async errors
@@ -91,7 +91,7 @@ del('/schedule/:id',async(req,res)=>{await q('DELETE FROM scheduled_posts WHERE 
 /* assistant + finance */
 post('/assistant',limit('assistant',30,3600),assistant);get('/finance/plan',financeRoute);
 /* Phase 1: priorities (1.1), AI context (1.2), marketing breakdown (1.4). Handlers live in insights.js */
-const ins=makeInsights({q,pageMetrics});get('/priorities',ins.priorities);get('/ai/context',ins.aiContext);get('/marketing/breakdown',ins.marketing);
+const ins=makeInsights({q,pageMetrics});get('/priorities',ins.priorities);get('/ai/context',ins.aiContext);get('/marketing/breakdown',ins.marketing);get('/goal',makeGoals({q,pageMetrics}).get);
 /* Phase 2: per-post analysis (2.2) and notifications (2.3). Handlers live in insights.js / notifications.js */
 get('/posts/:id/analysis',ins.postAnalysis);
 post('/priorities/:key/dismiss',dismissals.dismiss);

@@ -17,6 +17,25 @@ export function followerGrowth(m) {
     direction: !lead || lead.p === null ? null : lead.p > 0 ? 'up' : lead.p < 0 ? 'down' : 'flat', reconstructed: !!(a?.rec || b?.rec) };
 }
 
+// Roadmap O.4. The person's main goal (m.goal, from business_profile.goal_primary) nudges the ranking. The multipliers and bonuses
+// are my choices (see AI_DECISIONS); with no goal, or a goal not listed here, nothing changes.
+export const GOAL_AREA_FOCUS = {
+  followers: { 'Creator collaborations': 1.5, 'Giveaways and community': 1.5 },
+  reach: { 'Content production (reels, editing)': 1.5, 'Creator collaborations': 1.25 },
+  engagement: { 'Giveaways and community': 1.5, 'Content production (reels, editing)': 1.25 },
+  sales: { 'Paid promotion on best posts': 1.5 },
+  leads: { 'Paid promotion on best posts': 1.25, 'Giveaways and community': 1.25 },
+  brand: { 'Content production (reels, editing)': 1.5, 'Creator collaborations': 1.25 },
+};
+export const GOAL_TIP_BONUS = {
+  followers: { collab: 2, giveaway: 2, mention: 1 },
+  reach: { content: 2, collab: 1, consistency: 1 },
+  engagement: { community: 3, giveaway: 1 },
+  sales: { content: 1, community: 1 },
+  leads: { community: 2, mention: 1 },
+  brand: { content: 2, consistency: 2 },
+};
+
 // Non-technical growth levers (collabs, mentions, reshares, giveaways) rank ABOVE hashtags and new content.
 // Every tip carries `why` (the metric that triggered it) and `watch` (the metric to check afterwards).
 // Collab/mention counts are ESTIMATES (caption text), and "growth" is reach change, not followers.
@@ -66,6 +85,9 @@ export function advise(m) {
   add(1, 'hashtags', 'Refresh hashtags only after the points above.',
     'Hashtags are the lowest-impact lever in this list.',
     'Reach from hashtags in Instagram Insights');
+  // O.4: a stated goal lifts the tips that serve it. The reason is added to `why`; the tip text and its other fields are unchanged.
+  const bonus = GOAL_TIP_BONUS[m.goal];
+  if (bonus) tips.forEach(t => { if (bonus[t.kind]) { t.priority += bonus[t.kind]; t.why += ` Ranked higher because your main goal is ${m.goal}.`; } });
   return tips.sort((a, b) => b.priority - a.priority);
 }
 
@@ -81,13 +103,16 @@ export function health(m) {
 // Used by financePlan() (to split capital) and marketingBreakdown() (to explain where effort should go).
 export function needWeights(m) {
   const reelShare = m.types.find(t => isReel(t.type))?.share ?? 0;
-  return {
+  const w = {
     'Creator collaborations': (m.collabs30d < 2 ? 3 : 1) + (m.reachChange < 5 ? 2 : 0),
     'Content production (reels, editing)': (m.postsPerWeek < 3 ? 3 : 1) + (reelShare < 0.3 ? 2 : 0),
     'Paid promotion on best posts': m.er >= 3 ? 3 : 1,
     'Giveaways and community': m.mentions30d < 5 ? 2.5 : 1,
     'Tools and scheduling': 1,
   };
+  const focus = GOAL_AREA_FOCUS[m.goal]; // O.4: the goal re-weights; every caller (finance split, breakdown) therefore agrees
+  if (focus) for (const [area, f] of Object.entries(focus)) w[area] = +(w[area] * f).toFixed(2);
+  return w;
 }
 
 // Splits capital by the page's weakest areas and lists the free time/effort work.
@@ -137,7 +162,9 @@ export function marketingBreakdown(m) {
     const i = info[name];
     return { name, weight, share: Math.round((weight / total) * 100), ...i, ...(i.confidence === 'low' ? { caveat: CORRELATION } : {}) };
   }).sort((a, b) => b.weight - a.weight);
-  return { estimate: true, note: 'Estimates from caption text and 30-day reach change. They suggest where to focus, not what caused growth.', categories };
+  const focus = GOAL_AREA_FOCUS[m.goal] || {};
+  categories.forEach(c => { if (focus[c.name]) { c.goalBoost = true; c.evidence += ` Weighted up because your main goal is ${m.goal}.`; } });
+  return { estimate: true, goal: m.goal && GOAL_AREA_FOCUS[m.goal] ? m.goal : null, note: 'Estimates from caption text and 30-day reach change. They suggest where to focus, not what caused growth.', categories };
 }
 
 // Roadmap 1.2. Builds the "what does the AI know about this page" gap list. Pure, so it is unit-tested.
@@ -275,4 +302,63 @@ export function detectAlerts(base, cur, now = Date.now()) {
     ahead = now_ahead; // first run: baseline only, no alerts
   }
   return { alerts, state: { best_post_er: best, ahead } };
+}
+
+// Roadmap O.4. Progress towards the stored goal. Pure: profile = business_profile fields, m = pageMetrics().
+// Data used: follower_history for a followers goal (Instagram follower count; part may be reconstructed), the 30-day reach from posts for a
+// reach goal, the 30-day average engagement rate for an er goal. A followers goal with no follower history is NOT converted from reach:
+// the answer says so and shows the reach trend separately. `needsBaseline` tells the caller to store `currentValue` as the starting value.
+export function goalProgress(profile, m, now = Date.now()) {
+  const p = profile || {}, metric = p.goal_target_metric ?? null;
+  const out = { hasGoal: false, goal: p.goal_primary ?? null, metric, current: null, baseline: null, target: null, deadline: p.goal_deadline ?? null, daysLeft: null,
+    percent: null, pace: null, projected: null, achieved: false, needsBaseline: false, currentValue: null, explanation: '', dataUsed: null };
+  if (!metric || p.goal_target_value == null || !Number.isFinite(Number(p.goal_target_value))) {
+    out.explanation = 'No numeric target is set yet, so there is no progress to show. Pick a measure and a target number in your goal.'; return out;
+  }
+  const target = Number(p.goal_target_value), fg = followerGrowth(m);
+  let current = null, rate = null, unit = '', dataUsed = null, extra = '';
+  if (metric === 'followers') {
+    unit = 'followers';
+    if (fg.hasData) {
+      current = fg.followers; rate = fg.value30d != null ? fg.value30d / 30 : fg.value7d != null ? fg.value7d / 7 : null;
+      dataUsed = { source: 'follower_history', label: 'Instagram follower count' + (fg.reconstructed ? ' (part of the history is reconstructed from daily changes)' : '') };
+    } else if (m?.hasData) extra = ` Your reach changed ${m.reachChange}% vs the previous 30 days, but that is reach, not followers, so it is not used as progress.`;
+  } else if (metric === 'reach') {
+    unit = 'reach'; if (m?.hasData) {
+      current = m.reach30d; const rc = Number(m.reachChange);
+      if (Number.isFinite(rc) && rc !== 0 && rc > -100) rate = (m.reach30d - m.reach30d / (1 + rc / 100)) / 30; // change of the 30-day total per day; 0% cannot be told apart from "no earlier period"
+      dataUsed = { source: 'reach', label: 'Reach over the last 30 days (from posts, estimate of the trend)' };
+    }
+  } else {
+    unit = '% engagement rate'; if (m?.hasData) { current = m.er; dataUsed = { source: 'engagement_rate', label: 'Average engagement rate over the last 30 days (from posts)' }; }
+  }
+  out.hasGoal = true; out.target = target; out.dataUsed = dataUsed;
+  const name = { followers: 'followers', reach: '30-day reach', er: 'engagement rate' }[metric];
+  if (current === null) { out.explanation = `No ${metric === 'followers' ? 'Instagram follower history' : 'post data'} yet, so progress towards ${target.toLocaleString('en-US')} ${name} cannot be measured.` + extra; return out; }
+  out.current = current;
+  const base = p.goal_baseline_value == null ? null : Number(p.goal_baseline_value);
+  if (base === null) { out.needsBaseline = true; out.currentValue = current; out.explanation = `Your starting value has not been recorded yet. It will be today's ${name}: ${current.toLocaleString('en-US')}.`; return out; }
+  out.baseline = base;
+  const dir = target >= base ? 1 : -1, span = (target - base) * dir;
+  const raw = span === 0 ? (current * dir >= target * dir ? 100 : 0) : ((current - base) / (target - base)) * 100;
+  out.percent = +Math.min(100, Math.max(0, raw)).toFixed(1);
+  out.achieved = current * dir >= target * dir;
+  let daysLeft = null;
+  if (p.goal_deadline) { const d = Date.parse(String(p.goal_deadline).slice(0, 10) + 'T23:59:59Z'); if (Number.isFinite(d)) daysLeft = Math.ceil((d - now) / 864e5); }
+  out.daysLeft = daysLeft;
+  const fmt = n => (Math.abs(n) >= 100 ? Math.round(n) : +n.toFixed(2)).toLocaleString('en-US');
+  let pace = null, why = '';
+  if (out.achieved) { pace = 'ahead'; why = 'The target has been reached.'; }
+  else if (daysLeft === null) why = 'No deadline is set, so there is no pace to judge.';
+  else if (daysLeft < 0) { pace = 'behind'; why = `The deadline passed ${-daysLeft} day(s) ago and the target is not reached.`; }
+  else if (rate === null) why = metric === 'er' ? 'Engagement rate has no trend data here, so the pace is not judged.' : 'There is not enough history yet to judge the pace.';
+  else {
+    const need = (target - current) * dir, gain = rate * dir * daysLeft, ratio = gain / need;
+    out.projected = +(current + rate * daysLeft).toFixed(metric === 'er' ? 2 : 0);
+    pace = ratio >= 1.1 ? 'ahead' : ratio >= 0.9 ? 'on track' : 'behind';
+    why = `At the recent rate (${fmt(rate * dir)} ${unit} per day) you would reach about ${fmt(out.projected)} by the deadline, ${daysLeft} day(s) away.`;
+  }
+  out.pace = pace;
+  out.explanation = `${name[0].toUpperCase() + name.slice(1)}: ${fmt(current)} now, started at ${fmt(base)}, target ${fmt(target)} (${out.percent}% of the way). ${why}${extra} This is a projection from recent change, not a promise.`;
+  return out;
 }

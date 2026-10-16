@@ -94,6 +94,8 @@ export function makeOnboarding({ q }) {
     const skipped = new Set(cur?.skipped_steps ?? []);
     if (step) { if (skip) skipped.add(step); else skipped.delete(step); }
     const nextStep = step ? advance(cur?.onboarding_step ?? STEPS[0], step) : cur?.onboarding_step ?? STEPS[0];
+    // O.4: the starting value belongs to one goal. A different measure or target starts a new baseline; it is recorded again on the next read of GET /api/goal.
+    if (cur && !('goal_baseline_value' in clean) && ['goal_target_metric', 'goal_target_value'].some(f => f in clean && String(clean[f] ?? '') !== String(cur[f] ?? ''))) clean = { ...clean, goal_baseline_value: null };
     const cols = Object.keys(clean), vals = cols.map(c => clean[c]);
     const ins = ['user_id', ...cols, 'onboarding_step', 'skipped_steps'], ph = ins.map((_, i) => `$${i + 1}`);
     const sets = [...cols, 'onboarding_step', 'skipped_steps'].map(c => `${c}=EXCLUDED.${c}`).concat('updated_at=now()');

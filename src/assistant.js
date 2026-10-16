@@ -27,7 +27,10 @@ export async function pageMetrics(uid) {
   const [comp] = await q('SELECT handle FROM competitors WHERE user_id=$1 AND followers IS NOT NULL ORDER BY followers DESC LIMIT 1', [uid]);
   // A.1c: Instagram follower history (empty until the first connected sync). Additive: older consumers ignore it.
   const fh = await q(`SELECT to_char(captured_at AT TIME ZONE 'UTC','YYYY-MM-DD') AS day, followers, source FROM follower_history WHERE user_id=$1 AND followers IS NOT NULL ORDER BY captured_at DESC LIMIT 61`, [uid]);
+  // O.4: the main goal re-weights advice (advisor.GOAL_*). Null when the person has no profile or no goal; any failure means "no goal".
+  const [bp] = await q('SELECT goal_primary FROM business_profile WHERE user_id=$1', [uid]).catch(() => []);
   return {
+    goal: bp?.goal_primary ?? null,
     followerSeries: fh.reverse(),
     hasData: c.total > 0,
     reach30d: Math.round(c.r1), reachChange: pct(c.r1, c.r0),

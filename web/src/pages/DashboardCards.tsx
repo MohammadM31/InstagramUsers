@@ -34,6 +34,25 @@ export function Priorities(){
     </St>
   </Card>}
 
+// O.4: progress towards the goal from onboarding. States which data it used and says plainly when it cannot judge the pace.
+type Goal={hasGoal:boolean;goal:string|null;metric:string|null;current:number|null;baseline:number|null;target:number|null;deadline:string|null;daysLeft:number|null;percent:number|null;pace:'ahead'|'on track'|'behind'|null;projected:number|null;achieved:boolean;explanation:string;dataUsed:{source:string;label:string}|null};
+const PACE:Record<string,string>={ahead:'Ahead of pace','on track':'On track',behind:'Behind pace'};
+const num=(n:number|null|undefined)=>n==null?'—':Math.abs(n)>=100?Math.round(n).toLocaleString():String(+n.toFixed(2));
+export function GoalCard(){
+  const g=useQ<Goal>('/goal'),d=g.d;
+  return <Card full t="Your goal" tip="Progress from the starting value to your target. The pace is a projection from recent change, not a promise.">
+    <St l={g.l&&!d} e={g.e}>{d&&(!d.hasGoal?<p className="mu" style={{margin:0}}>{d.explanation}</p>:<div>
+      <div className="row" style={{margin:0,alignItems:'baseline'}}>
+        <b style={{fontSize:20}}>{d.percent==null?'—':d.percent+'%'}</b>
+        {d.pace&&<b className={d.pace==='behind'?'dn':'up'}>{PACE[d.pace]}</b>}
+        <span className="mu">{num(d.current)} now · target {num(d.target)}{d.deadline?` by ${d.deadline}`:''}{d.daysLeft!=null&&d.daysLeft>=0?` (${d.daysLeft} days left)`:''}</span>
+      </div>
+      {d.percent!=null&&<div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={d.percent} style={{height:8,borderRadius:4,background:'var(--bd)',margin:'8px 0'}}><div style={{width:d.percent+'%',height:'100%',borderRadius:4,background:'var(--ac,#833ab4)'}}/></div>}
+      <p className="mu" style={{margin:'4px 0'}}>{d.explanation}</p>
+      <p className="mu" style={{margin:0}}><b>Data used:</b> {d.dataUsed?d.dataUsed.label:'none yet'}</p>
+    </div>)}</St>
+  </Card>}
+
 export function AIContext(){
   const c=useQ<any>('/ai/context'),d=c.d,ig=useQ<IgStatus>('/instagram/status').d;
   return <Card full t="AI Context" tip="What the advice is based on, how fresh it is, and what is missing.">

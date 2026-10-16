@@ -45,6 +45,7 @@ The API **exits at boot** with a clear message if these are missing or malformed
     curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/content/image/<jobId>
     # O.3 brand voice: GET/PUT /api/voice (every save is a new version), POST /api/voice/samples, DELETE /api/voice/samples/:id, POST /api/onboarding/voice/generate
     curl -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"tone_tags":["warm","witty"],"emoji_use":"low","consent":false}' localhost:3000/api/onboarding/voice/generate
+    # O.4 goal progress: GET /api/goal (percent from the stored starting value to the target, pace, the data it used)
 `GET /health` is liveness; `GET /ready` also checks Postgres and Redis.
 
 CSV columns (case-insensitive, common aliases accepted): `date`, `type` (reel / carousel / image), `likes`, `comments`, `saves`, `shares`, `reach` (required), `impressions`, `watch_s`, `caption`.
