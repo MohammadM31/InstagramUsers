@@ -72,3 +72,12 @@ DO $$ BEGIN
     INSERT INTO business_profile(user_id,onboarding_step,completed_at) SELECT id,'done',now() FROM users;
   END IF;
 END $$;
+
+-- ===== O.3 brand voice (idempotent) =====
+-- Versioned: every save inserts a new row; the highest version is the current voice. Columns dos/donts because DO is a reserved word in Postgres (the API calls them do/dont).
+CREATE TABLE IF NOT EXISTS brand_voice(id serial PRIMARY KEY,user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,version int NOT NULL,tone_tags text[] NOT NULL DEFAULT '{}',formality text,length_pref text,emoji_use text,hashtag_style text,
+  dos text[] NOT NULL DEFAULT '{}',donts text[] NOT NULL DEFAULT '{}',phrases text[] NOT NULL DEFAULT '{}',summary text,source text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(user_id,version));
+-- Examples the person liked or disliked, and reference links (links are stored, never fetched). Deleted per item.
+CREATE TABLE IF NOT EXISTS voice_samples(id serial PRIMARY KEY,user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,kind text NOT NULL CHECK(kind IN('liked','disliked','reference_link')),text text,url text,
+  source_post_id int REFERENCES posts ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS voice_samples_user ON voice_samples(user_id,created_at);

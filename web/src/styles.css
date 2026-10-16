@@ -270,3 +270,11 @@
 .prog{height:6px;border-radius:3px;background:var(--bd);overflow:hidden;margin:0 0 10px}
 .prog i{display:block;height:100%;width:35%;border-radius:3px;background:var(--ig,#e1306c);animation:progmove 1.3s ease-in-out infinite}
 @keyframes progmove{0%{margin-left:-35%}100%{margin-left:100%}}
+/* O.3: brand voice step */
+.chip{display:inline-block;margin:3px 4px 3px 0;padding:3px 12px;border-radius:99px;border:1px solid var(--bd);background:transparent;color:inherit;font:inherit;cursor:pointer}
+.chip.on{background:var(--ac);border-color:var(--ac);color:#fff}
+.vsum{font-size:15px;line-height:1.5;margin:6px 0;padding:10px 12px;border-radius:8px;background:var(--soft);border:1px solid var(--bd)}
+.vsamples{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
+.vsamples li{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.vsamples li>span:nth-child(2){flex:1;overflow-wrap:anywhere}
+

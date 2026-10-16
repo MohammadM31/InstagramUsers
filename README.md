@@ -43,6 +43,8 @@ The API **exits at boot** with a clear message if these are missing or malformed
     # images are queued (Content AI and the assistant alike): POST returns {jobId}; poll until status is done/failed
     curl -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"prompt":"coffee cup on marble","ratio":"4:5","overlayText":"New Menu"}' localhost:3000/api/content/image
     curl -H "Authorization: Bearer $TOKEN" localhost:3000/api/content/image/<jobId>
+    # O.3 brand voice: GET/PUT /api/voice (every save is a new version), POST /api/voice/samples, DELETE /api/voice/samples/:id, POST /api/onboarding/voice/generate
+    curl -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"tone_tags":["warm","witty"],"emoji_use":"low","consent":false}' localhost:3000/api/onboarding/voice/generate
 `GET /health` is liveness; `GET /ready` also checks Postgres and Redis.
 
 CSV columns (case-insensitive, common aliases accepted): `date`, `type` (reel / carousel / image), `likes`, `comments`, `saves`, `shares`, `reach` (required), `impressions`, `watch_s`, `caption`.
@@ -61,4 +63,5 @@ Push the repo, New → Blueprint, fill the `sync:false` env vars. **`ENCRYPTION_
 - `src/worker.js`: `fetchProfile` uses Business Discovery when `IG_*` is set, else demo data; `processImport` (built in `src/importjob.js`) and `processImage` are the import and image jobs. The image result is a base64 data URI today: replace it with an S3/CDN upload at the marked swap point.
 - `src/images.js`: ProductAI's model registry, reference-image routing and fallback chain.
 - `src/assistant.js`: one-shot assistant; with an LLM key it picks one action from live page metrics, otherwise regex rules decide. Assistant-generated images are queued like Content AI's: the card polls `GET /api/content/image/:jobId` (`src/imagejobs.js` is shared by both).
+- `src/brandvoice.js` (O.3): the saved brand voice (summary and options, never the raw example captions) is added to the assistant's and the caption/hashtag generator's prompts. With no voice the prompts are exactly what they were before. AI writes the voice summary only when the person has their own OpenAI key stored and ticks the consent box; otherwise a template summary is built from the chosen options.
 - Not built yet: webhooks, TimescaleDB aggregates and S3 storage. Roadmap progress lives in `docs/AI_PROGRESS.md`.

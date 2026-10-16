@@ -4,6 +4,7 @@ import { enqueueImage, hasReplicateKey } from './imagejobs.js'; // 0.8: image wo
 import { advise, health, financePlan } from './advisor.js';
 import { llmConfig } from './keys.js';
 import { hit } from './ratelimit.js';
+import { currentVoice, voiceInstruction } from './brandvoice.js'; // O.3: the saved brand voice shapes the wording of the reply
 
 const ER = '(coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))';
 const L30 = "posted_at>now()-interval '30 days'";
@@ -49,13 +50,15 @@ const amount = t => Number(t.match(/\$?\s?(\d[\d,]*)/)?.[1]?.replace(/,/g, '')) 
 async function route(text, m, tips, uid) {
   const cfg = await llmConfig(uid); // 0.4: user's stored key first, env fallback
   if (cfg) try {
+    const voice = voiceInstruction(await currentVoice(q, uid).catch(() => null)); // '' when none
     const r = await fetch(cfg.base + '/chat/completions', {
       method: 'POST', headers: { Authorization: 'Bearer ' + cfg.key, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(10000),
       body: JSON.stringify({ model: cfg.model, response_format: { type: 'json_object' }, messages: [
         { role: 'system', content: `You are the assistant inside an Instagram growth tool. You know this page's live state:\n${JSON.stringify({ metrics: m, health: health(m), priorities: tips.slice(0, 4).map(t => t.text) })}\n` +
           `Pick ONE action for the user's request. Return JSON {"intent":"image|analytics|finance|tip|info","text":"","imagePrompt":"","capital":0}. ` +
           `"text" is at most 20 words, plain and brief, no greeting. Use intent "image" only if they want a picture made (put the visual in imagePrompt). "analytics" for performance/progress/page info, "finance" for budget or capital (put the amount in capital), "tip" for what to do next. ` +
-          `When advising, prefer collaborations, mentions, reshares, giveaways and community over hashtags or posting more. Never invent numbers not in the state.` },
+          `When advising, prefer collaborations, mentions, reshares, giveaways and community over hashtags or posting more. Never invent numbers not in the state.` +
+          (voice ? `\nBrand voice for the wording of "text" (the limits above still apply): ${voice}` : '') },
         { role: 'user', content: text }] }) });
     const j = await r.json(), o = JSON.parse(j.choices[0].message.content);
     if (['image', 'analytics', 'finance', 'tip', 'info'].includes(o.intent)) return o;

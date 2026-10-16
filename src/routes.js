@@ -1,5 +1,5 @@
-import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {makeOnboarding} from './onboarding.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';import {makeNotifications} from './notifications.js';import {igConnect,igSync,dismissals} from './igwire.js';
-import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ,importQ,imageQ} from './queue.js';import {limit} from './ratelimit.js';import {llmConfig,keyFor} from './keys.js';import {parseCsv} from './csv.js';import {MAX_ROWS} from './importer.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';
+import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {makeOnboarding} from './onboarding.js';import {makeBrandVoice,currentVoice,captionPrompt,hashtagPrompt} from './brandvoice.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';import {makeNotifications} from './notifications.js';import {igConnect,igSync,dismissals} from './igwire.js';
+import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ,importQ,imageQ} from './queue.js';import {limit,hit} from './ratelimit.js';import {llmConfig,keyFor} from './keys.js';import {parseCsv} from './csv.js';import {MAX_ROWS} from './importer.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';
 export const api=Router();api.use(requireAuth);
 const wrap=f=>(req,res,next)=>Promise.resolve(f(req,res,next)).catch(next); // Express 4 needs this for async errors
 const hs=f=>f.map((h,i)=>i===f.length-1?wrap(h):h); // variadic: route(path, ...middleware, handler); only the last one is async-wrapped
@@ -25,9 +25,10 @@ async function llm(uid,system,user){const c=await llmConfig(uid);if(!c)throw Obj
  const r=await fetch(c.base+'/chat/completions',{method:'POST',signal:AbortSignal.timeout(30000),headers:{Authorization:'Bearer '+c.key,'Content-Type':'application/json'},body:JSON.stringify({model:c.model,messages:[{role:'system',content:system},{role:'user',content:user}],response_format:{type:'json_object'}})});
  const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'llm error');return JSON.parse(j.choices[0].message.content)}
 const text=limit('captions-hashtags',60,3600); // 0.3: one shared bucket
-post('/content/captions',text,async(req,res)=>{const{topic,tone='professional',goal='engagement',emoji='med'}=req.body||{};
- res.json(await llm(req.uid,'You write Instagram captions. Return JSON {"variants":[{"hook":"","body":"","cta":""}]} with exactly 5 variants.',`Topic: ${topic}\nTone: ${tone}\nGoal: ${goal}\nEmoji level: ${emoji}`))});
-post('/content/hashtags',text,async(req,res)=>res.json(await llm(req.uid,'Return JSON {"high":[],"mid":[],"niche":[],"branded":[]} totalling 30 Instagram hashtags.',`Niche: ${req.body?.niche}`)));
+/* O.3: the brand voice (profile only, never raw samples) shapes captions and hashtags; with no voice the prompts are exactly the old ones (see brandvoice.js) */
+const voiceOf=uid=>currentVoice(q,uid).catch(()=>null);
+post('/content/captions',text,async(req,res)=>{const p=captionPrompt(req.body||{},await voiceOf(req.uid));res.json(await llm(req.uid,p.system,p.user))});
+post('/content/hashtags',text,async(req,res)=>{const p=hashtagPrompt(req.body||{},await voiceOf(req.uid));res.json(await llm(req.uid,p.system,p.user))});
 /* 0.5 async image generation: POST returns {jobId}; the worker does the slow part */
 const needKey=async(req,res,next)=>{try{if(!await hasReplicateKey(req.uid))return res.status(503).json({error:'No Replicate key: add one in Settings or set REPLICATE_API_TOKEN'});next()}catch(e){next(e)}}; // runs BEFORE the limiter so a 503 does not spend the image budget
 post('/content/image',needKey,limit('image',20,3600),async(req,res)=>{const b=req.body||{},prompt=String(b.prompt||'').trim().slice(0,1000);
@@ -63,7 +64,7 @@ get('/import/status',async(req,res)=>{const[c]=await q('SELECT count(*)::int cou
  res.json({count:c.count,lastImportAt:l?.at||null,source:l?.source||null,lastResult:l?{imported:l.imported,duplicates:l.duplicates}:null})});
 get('/gdpr/export',async(req,res)=>{const o={};for(const t of['posts','competitors','scrape_audit','hashtag_sets','import_log','notifications'])o[t]=await q(`SELECT * FROM ${t} WHERE user_id=$1`,[req.uid]);
  o.ig_accounts=await q('SELECT user_id,ig_user_id,page_id,username,account_type,scopes,token_expires_at,status,followers_at_connect,last_sync_at,last_error,connected_at FROM ig_accounts WHERE user_id=$1',[req.uid]);o.scheduled_posts=await q('SELECT id,caption,platforms,scheduled_at,status,error,published_at FROM scheduled_posts WHERE user_id=$1',[req.uid]);o.api_keys=await q('SELECT name FROM api_keys WHERE user_id=$1',[req.uid]);
- for(const t of['follower_history','ig_account_daily','ig_audience'])o[t]=await q(`SELECT * FROM ${t} WHERE user_id=$1`,[req.uid]);o.priority_dismissals=await q('SELECT tip_key,until FROM priority_dismissals WHERE user_id=$1',[req.uid]);
+ for(const t of['follower_history','ig_account_daily','ig_audience','brand_voice','voice_samples'])o[t]=await q(`SELECT * FROM ${t} WHERE user_id=$1`,[req.uid]);o.priority_dismissals=await q('SELECT tip_key,until FROM priority_dismissals WHERE user_id=$1',[req.uid]);
  o.business_profile=await q('SELECT * FROM business_profile WHERE user_id=$1',[req.uid]);o.post_snapshots=await q('SELECT s.* FROM post_snapshots s JOIN posts p ON p.id=s.post_id WHERE p.user_id=$1 ORDER BY s.post_id,s.captured_at',[req.uid]);o.metrics_baseline=await q('SELECT * FROM metrics_baseline WHERE user_id=$1',[req.uid]);res.json(o)});
 del('/gdpr/account',async(req,res)=>{await q('DELETE FROM users WHERE id=$1',[req.uid]);res.json({deleted:true})});
 /* analytics */
@@ -101,3 +102,6 @@ const nt=makeNotifications({q});get('/notifications',nt.list);api.patch('/notifi
 /* Phase A.1a/b: Instagram connection + sync. The OAuth callback is public and lives in server.js (the browser has no bearer token there). */
 get('/instagram/connect/start',igConnect.start);get('/instagram/status',igConnect.status);del('/instagram/disconnect',igConnect.disconnect);
 post('/instagram/sync',igSync.requestSync);get('/instagram/sync/:jobId',igSync.jobStatus);
+/* O.3 brand voice. Raw samples go to an LLM only from generate, with consent=true and only to the user's own stored key (getLlm returns null for the env key). */
+const bv=makeBrandVoice({q,hit,getLlm:async uid=>{const c=await llmConfig(uid);return c?.source==='user'?c:null}}),vw=limit('voice-edit',120,3600);
+get('/voice',bv.get);put('/voice',vw,bv.put);post('/voice/samples',vw,bv.addSample);del('/voice/samples/:id',vw,bv.removeSample);post('/onboarding/voice/generate',vw,bv.generate);

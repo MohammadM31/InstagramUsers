@@ -1,10 +1,11 @@
 // Roadmap O.1: first-run setup wizard. Shown by App.tsx until the server says completed. Every step saves on Continue, so a reload resumes where the user stopped.
-// Step 'connect' (O.2) is ConnectStep; 'voice' (O.3) is a placeholder that is marked skipped so it is offered again once it exists.
+// Step 'connect' (O.2) is ConnectStep; 'voice' (O.3) is VoiceStep, which saves its own data; "Yes, that is me" marks the step done and moves on.
 import {useEffect,useState} from 'react';
 import {api} from '../api';
 import {STEPS,TITLES,FIELDS,toForm,toPayload,startIndex,detectedZone} from '../onb';
 import type {StepKey,Form,Field} from '../onb';
 import ConnectStep from './ConnectStep';
+import VoiceStep from './VoiceStep';
 
 type Ob={profile:Record<string,any>;step:string;skippedSteps:string[];completed:boolean};
 
@@ -41,7 +42,7 @@ export default function Onboarding({onDone,igMsg}:{onDone:()=>void;igMsg?:{ok:bo
     <div className="card"><h3>{TITLES[step]} <span className="mu">· step {i+1} of {STEPS.length}</span></h3>
       {step==='about'&&<p className="mu">Tell us a little so advice fits you. Only your name is required; you can skip everything else and change it later in Settings.</p>}
       {step==='connect'&&<><p className="mu">Connect your Instagram professional account so the app can use your real numbers. You can skip this and import a CSV instead.</p><ConnectStep igMsg={igMsg}/></>}
-      {step==='voice'&&<p className="mu">Brand voice (how your captions should sound) arrives in an upcoming update. You will be able to set it in Settings.</p>}
+      {step==='voice'&&<><p className="mu">How should your captions sound? The assistant and the caption generator will write in this voice.</p><VoiceStep busy={bz} onAccept={async()=>{const d=await save({});if(d)go(i+1,d)}}/></>}
       {step==='goals'&&<p className="mu">Pick what matters most. The Dashboard will show progress toward it using your real numbers.</p>}
       {FIELDS[step].map(f=><Input key={f.k} f={f} v={form[f.k]} set={x=>setForm(s=>({...s,[f.k]:x}))}/>)}
       {err&&<div className="dn" role="alert">⚠ {err}</div>}
