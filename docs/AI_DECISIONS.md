@@ -112,3 +112,10 @@ The PDF report asked for six decisions and said its defaults apply if the user j
 70. PROPOSED weights (my choices, not in the PDF): see advisor.GOAL_AREA_FOCUS (area multipliers 1.25-1.5) and GOAL_TIP_BONUS (priority +1 to +3). The goal never removes a tip or an area; it re-orders and re-weights, and the tip's `why` says it was ranked higher because of the goal. Only goal_primary is used; goal_secondary is returned by /api/goal but does not weight anything yet.
 71. The goal reaches the advisor through `pageMetrics().goal` (one extra query, any failure = no goal), so the assistant, finance split, priorities and breakdown all agree without changing their signatures.
 
+## 2026-10-16 - 4.2 editable responses and D.1 voice input (session 10)
+72. 4.2 keeps one row per (user, original text), so editing the same reply twice updates the edit and never overwrites the original. Table and columns follow the PDF (`saved_responses`, original, edited) plus `kind` ('assistant' | 'proposal_caption' for C.3), timestamps and a 500-row cap per user (my choice, PROPOSED). Text limit 4000 characters on both sides; an unchanged or empty edit is a 400.
+73. Only plain text replies are editable (not images, the analytics card, the finance split, or a reply still generating). The marker is a small italic "edited" tag; the original shows in its tooltip. There is no "reset" button yet.
+74. The person can list and delete saved edits through the API (GET /api/responses, DELETE /api/responses/:id); no screen uses it yet. Saved edits are in the GDPR export and deleted with the account (cascade).
+75. D.1 is browser-only (decision D10): no backend, no audio leaves the page except to the browser's own speech service, stated in a notice shown before first use (remembered in localStorage). Language picker defaults to the first language from setup; the list (English, Arabic, French, Spanish, German) is my choice, PROPOSED. Continuous mode is a toggle, off by default.
+76. No keyboard shortcut was added for the mic (see the checkpoint). Permission denied or no microphone disables the mic with the reason; other errors show a message and leave the mic usable.
+

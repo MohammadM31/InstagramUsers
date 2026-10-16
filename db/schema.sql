@@ -81,3 +81,9 @@ CREATE TABLE IF NOT EXISTS brand_voice(id serial PRIMARY KEY,user_id uuid NOT NU
 CREATE TABLE IF NOT EXISTS voice_samples(id serial PRIMARY KEY,user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,kind text NOT NULL CHECK(kind IN('liked','disliked','reference_link')),text text,url text,
   source_post_id int REFERENCES posts ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS voice_samples_user ON voice_samples(user_id,created_at);
+-- Roadmap 4.2: edited assistant responses (original + edit; one row per user and original text)
+CREATE TABLE IF NOT EXISTS saved_responses(id serial PRIMARY KEY,user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,kind text NOT NULL DEFAULT 'assistant' CHECK(kind IN('assistant','proposal_caption')),
+  original text NOT NULL,edited text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX IF NOT EXISTS saved_responses_orig ON saved_responses(user_id,md5(original));
+CREATE INDEX IF NOT EXISTS saved_responses_user ON saved_responses(user_id,updated_at DESC);
+

@@ -280,4 +280,10 @@
 .pf .obf{display:grid;gap:4px;margin:10px 0}.pf .obchk{display:flex;gap:8px;align-items:flex-start;margin:10px 0}
 .pf .pfs{border-top:1px solid var(--bd);padding:10px 0}.pf .pfs:first-child{border-top:0}
 .pf .pfd{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px 16px;margin:8px 0 0}.pf .pfd div{margin:0}.pf .pfd dt{font-size:12px}.pf .pfd dd{margin:0;overflow-wrap:anywhere}
+.result .edited{font-size:11px;font-style:italic;border:1px solid var(--bd);border-radius:10px;padding:0 6px}
+.composer form button.mic{padding:8px 8px;display:flex;align-items:center;color:var(--mu)}.composer form button.mic svg{width:20px;height:20px}
+.composer form button.mic.listening{color:#e1306c;animation:micpulse 1.2s ease-in-out infinite}
+@keyframes micpulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.composer form button.mic.listening{animation:none;outline:2px solid #e1306c;border-radius:50%}}
+.composer .voicebar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:6px 12px;margin-bottom:6px;font-size:13px}
 

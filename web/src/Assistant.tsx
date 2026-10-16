@@ -2,10 +2,30 @@ import {useState,useRef,useEffect} from 'react';
 import type {FormEvent} from 'react';
 import {api} from './api';
 import {ICONS} from './icons';
+import {canEditResponse,checkEdit,applyEdit} from './resp';
+import {LANGS,NOTICE,NOTICE_KEY,defaultLang,getRecognition,describeSpeechError,splitResults,mergeTranscript} from './speech';
 
-type R={type:string;text:string;data?:any};
+type R={type:string;text:string;data?:any;original?:string;edited?:boolean};
 
-function Result({r}:{r:R}){
+// 4.2: plain text replies can be edited. The original and the edit are both saved on the server (POST /responses/save); edited text carries a small marker.
+function Editable({r,onSaved}:{r:R;onSaved:(t:string)=>void}){
+  const[editing,setEditing]=useState(false),[draft,setDraft]=useState(''),[err,setErr]=useState(''),[bz,setBz]=useState(false);
+  const start=()=>{setDraft(r.text);setErr('');setEditing(true)};
+  const save=async()=>{
+    const original=r.original??r.text,c=checkEdit(original,draft);if('error' in c){setErr(c.error);return}
+    setBz(true);setErr('');
+    try{const x=await api<{response:{edited:string}}>('/responses/save',{method:'POST',body:{kind:'assistant',original,edited:c.text}});onSaved(x.response.edited);setEditing(false)}
+    catch(e:any){setErr(e.message)}finally{setBz(false)}};
+  if(editing)return <div>
+    <textarea rows={4} style={{width:'100%'}} aria-label="Edit the response" value={draft} onChange={e=>setDraft(e.target.value)}/>
+    {err&&<div className="dn" role="alert">⚠ {err}</div>}
+    <div className="row" style={{justifyContent:'flex-start'}}><button className="btn s" disabled={bz} onClick={save}>{bz?'Saving…':'Save'}</button><button className="btn g s" disabled={bz} onClick={()=>setEditing(false)}>Cancel</button></div></div>;
+  return <div><p style={{margin:0}}>{r.text}</p>
+    <div className="row" style={{margin:'6px 0 0',justifyContent:'flex-start'}}>
+      {r.edited&&<span className="mu edited" title={r.original?'Original: '+r.original:undefined}>edited</span>}
+      <button className="btn g s" onClick={start}>Edit</button></div></div>}
+
+function Result({r,onSaved}:{r:R;onSaved:(t:string)=>void}){
   const d=r.data||{};
   if(r.type==='image'&&d.url)return <><img src={d.url} alt="Generated"/><div className="row"><span className="mu">{r.text}</span><a className="btn s" href={d.url} download="post.png">Save</a></div></>;
   if(r.type==='analytics')return <>
@@ -15,6 +35,7 @@ function Result({r}:{r:R}){
   if(r.type==='finance')return <><span className="tag">${d.capital.toLocaleString()} suggested split</span>
     {d.money.map((m:any)=><div key={m.area}><div className="row" style={{margin:0}}><span>{m.area}</span><b>${m.amount}</b></div><div className="bar"><div style={{width:m.share+'%'}}/></div></div>)}
     {d.time.map((t:string,i:number)=><p key={i}>{t}</p>)}</>;
+  if(canEditResponse(r))return <><Editable r={r} onSaved={onSaved}/>{d.more?.map((t:any,i:number)=><p key={i} className="mu">{t.text}</p>)}</>;
   return <><p style={{margin:0}}>{r.text}</p>{d.more?.map((t:any,i:number)=><p key={i} className="mu">{t.text}</p>)}</>}
 
 const BAR_KEY='rt:assistant:bar';
@@ -50,11 +71,35 @@ export default function Assistant(){
   // Hiding the bar does NOT clear r: the response is preserved and re-shown on unhide.
   const toggleBar=()=>setBarHidden(h=>!h);
 
+  // D.1 voice input: browser speech recognition, no backend. The mic is not drawn when the browser has none (e.g. Firefox).
+  const Rec=getRecognition(window),recRef=useRef<any>(null),baseRef=useRef('');
+  const[listening,setListening]=useState(false),[vOff,setVOff]=useState(''),[vMsg,setVMsg]=useState(''),[vOpts,setVOpts]=useState(false),[vNotice,setVNotice]=useState(false),
+    [cont,setCont]=useState(false),[lang,setLang]=useState('en-US'),langTouched=useRef(false);
+  useEffect(()=>{if(!Rec)return;api<any>('/profile').then(p=>{if(!langTouched.current)setLang(defaultLang(p.languages))}).catch(()=>{})},[]);
+  useEffect(()=>()=>{try{recRef.current?.abort()}catch{}},[]);
+  const stopVoice=()=>{try{recRef.current?.stop()}catch{}};
+  const startVoice=()=>{
+    setVMsg('');baseRef.current=m;
+    try{
+      const x=new Rec();x.lang=lang;x.continuous=cont;x.interimResults=true;
+      x.onresult=(e:any)=>{const s=splitResults(e.results);setM(mergeTranscript(baseRef.current,s.finals,s.interim))};
+      x.onerror=(e:any)=>{const d=describeSpeechError(e.error);if(d.message)setVMsg(d.message);if(d.fatal)setVOff(d.message)};
+      x.onend=()=>{setListening(false);recRef.current=null};
+      recRef.current=x;x.start();setListening(true);
+    }catch{setVMsg('Voice input could not start. You can still type.');setListening(false)}};
+  const micClick=()=>{
+    if(listening){stopVoice();return}
+    let seen='1';try{seen=localStorage.getItem(NOTICE_KEY)||''}catch{}
+    if(!seen){setVNotice(true);return}
+    startVoice()};
+  const acceptNotice=()=>{try{localStorage.setItem(NOTICE_KEY,'1')}catch{}setVNotice(false);startVoice()};
+
   const pick=(e:any)=>{const x=e.target.files?.[0];if(!x)return;const fr=new FileReader();fr.onload=()=>setRef(String(fr.result));fr.readAsDataURL(x)};
 
   const send=async(e:FormEvent)=>{
     e.preventDefault();
     if(!m.trim()||b)return;
+    stopVoice();
     setB(true);
     const id=++seq.current;
     // A new request resets any dock/position so the fresh card appears attached
@@ -83,7 +128,7 @@ export default function Assistant(){
   const onDown=(e:React.PointerEvent)=>{
     // Ignore drags starting on buttons, links, or the X
     const t=e.target as HTMLElement;
-    if(t.closest('button,a'))return;
+    if(t.closest('button,a,textarea,input'))return;
     if(!cardRef.current)return;
     const rect=cardRef.current.getBoundingClientRect();
     drag.current={dx:e.clientX-rect.left,dy:e.clientY-rect.top};
@@ -169,7 +214,7 @@ export default function Assistant(){
             onPointerDown={e=>e.stopPropagation()}
             onClick={hideResponse}>×</button>
         </div>
-        <Result r={r}/>
+        <Result r={r} onSaved={t=>setR(x=>x&&applyEdit(x,t))}/>
       </div>
     )}
 
@@ -180,10 +225,20 @@ export default function Assistant(){
     {!barHidden && (
       <div className="composer">
         {!r&&!m&&<div className="chips">{['How am I doing?','What should I do next?','Budget $1000','Image of a coffee cup'].map(c=><button key={c} onClick={()=>go(c)}>{c}</button>)}</div>}
+        {Rec&&(listening||vMsg||vNotice||vOpts||vOff)&&<div className="voicebar" role="status">
+          {vNotice&&<div><p className="mu" style={{margin:'0 0 6px'}}>{NOTICE}</p><button type="button" className="btn s" onClick={acceptNotice}>Got it, start listening</button> <button type="button" className="btn g s" onClick={()=>setVNotice(false)}>Cancel</button></div>}
+          {listening&&<span className="mu">Listening… speak now{cont?' (keeps listening until you stop)':''}</span>}
+          {(vMsg||vOff)&&<span className="dn">{vOff||vMsg}</span>}
+          {vOpts&&<span className="row" style={{margin:0}}>
+            <label className="mu">Language <select value={lang} disabled={listening} onChange={e=>{langTouched.current=true;setLang(e.target.value)}}>{LANGS.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></label>
+            <label className="mu"><input type="checkbox" style={{width:'auto'}} checked={cont} disabled={listening} onChange={e=>setCont(e.target.checked)}/> Keep listening</label></span>}
+          <button type="button" className="btn g s" aria-label="Voice options" aria-expanded={vOpts} onClick={()=>setVOpts(o=>!o)}>⚙</button>
+        </div>}
         <form onSubmit={send}>
           <input ref={f} type="file" accept="image/*" hidden onChange={pick}/>
           <button type="button" className={ref?'on':''} aria-label="Attach product photo" title="Attach a product photo to edit" onClick={()=>f.current?.click()}>{ICONS.clip}</button>
           <input value={m} onChange={e=>setM(e.target.value)} placeholder="Ask for analytics, an image, ideas, a budget…"/>
+          {Rec&&<button type="button" className={'mic'+(listening?' listening':'')} disabled={!!vOff} aria-pressed={listening} aria-label={listening?'Stop voice input':'Start voice input'} title={vOff||(listening?'Stop voice input':'Speak your request')} onClick={micClick}>{ICONS.mic}</button>}
           <button type="submit" disabled={b||!m.trim()}>{b?'…':'Send'}</button>
           <button type="button" className="toggle" aria-label="Hide assistant" title="Hide assistant" onClick={toggleBar}>{ICONS.chevDown}</button>
         </form>
