@@ -87,3 +87,28 @@ export function toPayload(step: StepKey, form: Form): { body: Record<string, any
 // Where to open the wizard: the server's step, or the last screen when everything is already saved or skipped.
 export const startIndex = (step: string): number => { const i = STEPS.indexOf(step as StepKey); return i < 0 ? STEPS.length - 1 : i; };
 export const detectedZone = (): string => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } };
+
+// Roadmap O.6 (Settings > Business Profile). Sections that are plain fields; connect and voice have their own screens.
+export const PROFILE_SECTIONS = ['about', 'business', 'goals', 'content'] as const;
+export type ProfileSection = typeof PROFILE_SECTIONS[number];
+
+// True when the form differs from what is saved, so Save stays off until something changed.
+export const isDirty = (step: StepKey, form: Form, profile: Record<string, any>): boolean => {
+  const saved = toForm(step, profile);
+  return FIELDS[step].some(f => String(form[f.k] ?? '') !== String(saved[f.k] ?? ''));
+};
+
+// Read-only view of one section: "Label: value" for every field that has a value (empty fields are left out, never shown as "null").
+export function summaryLines(step: StepKey, profile: Record<string, any>): { label: string; value: string }[] {
+  const out: { label: string; value: string }[] = [];
+  for (const f of FIELDS[step]) {
+    const v = profile?.[f.k];
+    if (f.kind === 'bool') { out.push({ label: f.label, value: v ? 'Yes' : 'No' }); continue; }
+    const t = f.kind === 'list' ? textFromList(v) : v === null || v === undefined ? '' : String(v);
+    if (!t) continue;
+    const opt = f.options?.find(([k]) => k === t);
+    out.push({ label: f.label, value: opt ? opt[1] : t });
+  }
+  return out;
+}
+

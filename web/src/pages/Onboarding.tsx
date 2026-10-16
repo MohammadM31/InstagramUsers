@@ -9,7 +9,7 @@ import VoiceStep from './VoiceStep';
 
 type Ob={profile:Record<string,any>;step:string;skippedSteps:string[];completed:boolean};
 
-function Input({f,v,set}:{f:Field;v:string|boolean;set:(x:string|boolean)=>void}){
+export function Input({f,v,set}:{f:Field;v:string|boolean;set:(x:string|boolean)=>void}){
   if(f.kind==='bool')return <label className="obchk"><input type="checkbox" style={{width:'auto'}} checked={!!v} onChange={e=>set(e.target.checked)}/> <span>{f.label}</span></label>;
   const common={value:String(v??''),onChange:(e:any)=>set(e.target.value)};
   return <label className="obf"><span>{f.label}{f.required&&' *'}</span>
