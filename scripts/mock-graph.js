@@ -18,6 +18,13 @@ http.createServer((req, res) => {
   if (p === '/IG_1/media') return send(q.get('after') === 'CUR1' ? fx('media_page2') : fx('media_page1'));
   // ---- A.1c/A.1d account endpoints (hand-written; day values are generated relative to today) ----
   if (p === '/me' && q.get('fields') === 'id') return send({ id: 'FB_42' });
+  // ---- A.3 Business Discovery (must come before the plain followers_count route). A username containing "private" gets Meta's invalid-user error. ----
+  const bd = (q.get('fields') || '').match(/^business_discovery\.username\(([^)]*)\)/);
+  if (p === '/IG_1' && bd) {
+    if (/private/i.test(bd[1])) return send(fx('error_110_user'), 400);
+    if (/hidden/i.test(bd[1])) return send(fx('discovery_hidden_likes'));
+    return send({ ...fx('discovery_ok'), business_discovery: { ...fx('discovery_ok').business_discovery, followers_count: +(process.env.MOCK_COMP_FOLLOWERS || 52000) } });
+  }
   if (p === '/IG_1' && /followers_count/.test(q.get('fields') || '')) return send({ followers_count: +(process.env.MOCK_FOLLOWERS || 1240), media_count: 87 });
   if (p === '/IG_1/insights') {
     const metric = q.get('metric') || '', day = 864e5, d0 = Date.parse(new Date().toISOString().slice(0, 10) + 'T07:00:00Z');

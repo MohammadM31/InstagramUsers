@@ -1,0 +1,4 @@
+{"business_discovery":{"followers_count":52000,"media_count":412,"media":{"data":[
+ {"id":"D1","timestamp":"2026-10-15T10:00:00+0000","media_type":"VIDEO","like_count":1200,"comments_count":40,"caption":"reel one"},
+ {"id":"D2","timestamp":"2026-10-13T10:00:00+0000","media_type":"IMAGE","like_count":800,"comments_count":20,"caption":"photo"},
+ {"id":"D3","timestamp":"2026-10-11T10:00:00+0000","media_type":"CAROUSEL_ALBUM","like_count":1000,"comments_count":30,"caption":"carousel"}]}},"id":"IG_1"}

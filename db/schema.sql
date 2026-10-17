@@ -95,3 +95,10 @@ CREATE TABLE IF NOT EXISTS post_comments(id serial PRIMARY KEY,user_id uuid NOT 
   username text,text text NOT NULL,likes int,posted_at timestamptz NOT NULL,owner_replied boolean NOT NULL DEFAULT false,fetched_at timestamptz NOT NULL DEFAULT now(),UNIQUE(user_id,ig_comment_id));
 CREATE INDEX IF NOT EXISTS post_comments_post ON post_comments(post_id,posted_at DESC);
 CREATE INDEX IF NOT EXISTS post_comments_age ON post_comments(posted_at);
+
+-- A.3 competitor history: one row per competitor per UTC day (the latest scrape of the day wins). Only real Business Discovery numbers are
+-- stored (demo scrapes are skipped in code), and only public metrics. Cascades with the competitor and therefore with the user; the GDPR
+-- export reads it through competitors (no user_id column of its own).
+CREATE TABLE IF NOT EXISTS competitor_history(id serial PRIMARY KEY,competitor_id int NOT NULL REFERENCES competitors ON DELETE CASCADE,captured_at timestamptz NOT NULL DEFAULT now(),
+  followers int,posts_count int,avg_likes numeric(12,1),avg_comments numeric(12,1));
+CREATE UNIQUE INDEX IF NOT EXISTS competitor_history_day ON competitor_history(competitor_id,((captured_at AT TIME ZONE 'UTC')::date));

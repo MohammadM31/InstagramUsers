@@ -258,7 +258,7 @@ export function postAnalysis(post, snapshots, m) {
 //          competitors = [{ handle, avgLc, n }]  avgLc = average likes+comments per post (reach is not public for other accounts)
 // Returns { alerts: [{kind,title,body,watch,key}], state: { best_post_er, ahead } } where state is what the baseline should store next.
 // ---------------------------------------------------------------------------------------------
-export const ALERT_RULES = { reachDropPct: 15, erDropPoints: 2, minCompetitorPosts: 3 };
+export const ALERT_RULES = { reachDropPct: 15, erDropPoints: 2, minCompetitorPosts: 3, momentumMinPct: 1 };
 
 export function detectAlerts(base, cur, now = Date.now()) {
   const week = Math.floor(now / 6048e5); // a persistent drop alerts once per week, not every hour
@@ -302,6 +302,37 @@ export function detectAlerts(base, cur, now = Date.now()) {
     ahead = now_ahead; // first run: baseline only, no alerts
   }
   return { alerts, state: { best_post_er: best, ahead } };
+}
+
+// Roadmap A.3. Competitor follower momentum from competitor_history, compared with the person's own 7-day follower change.
+//   c = { handle, history: [{ day:'YYYY-MM-DD', followers }] }   own = followerGrowth(...) result (or null)
+// A window is reported only when a point at or before that distance exists, never guessed. outPacing needs BOTH 7-day changes to be known
+// and the competitor to have gained followers. Public metrics only: the competitor's reach is not available.
+export function competitorMomentum(c, own = null) {
+  const s = (c?.history || []).filter(x => Number.isFinite(Number(x.followers)) && x.day).map(x => ({ day: x.day, followers: Number(x.followers) })).sort((a, b) => a.day.localeCompare(b.day));
+  const out = { handle: c?.handle ?? null, followers: null, lastDay: null, followersChange7d: null, followersChange30d: null, pct7d: null, ownChange7d: own?.value7d ?? null, outPacing: false, publicMetricsOnly: true };
+  if (!s.length) return out;
+  const last = s[s.length - 1], t = Date.parse(last.day + 'T00:00:00Z');
+  const ref = n => [...s].reverse().find(x => Date.parse(x.day + 'T00:00:00Z') <= t - n * 864e5);
+  const r7 = ref(7), r30 = ref(30);
+  out.followers = last.followers; out.lastDay = last.day;
+  out.followersChange7d = r7 ? last.followers - r7.followers : null;
+  out.followersChange30d = r30 ? last.followers - r30.followers : null;
+  out.pct7d = r7 && r7.followers > 0 ? +(((last.followers - r7.followers) / r7.followers) * 100).toFixed(1) : null;
+  out.outPacing = out.followersChange7d !== null && out.ownChange7d !== null && out.followersChange7d > 0 && out.followersChange7d > out.ownChange7d;
+  return out;
+}
+
+// Notification for an outpacing competitor, or null. Needs fresh data (last point within 3 days of now) and a gain of at least
+// ALERT_RULES.momentumMinPct percent of their followers, so a rival with a huge audience gaining 3 followers stays silent.
+export function momentumAlert(m, now = Date.now()) {
+  if (!m || !m.outPacing || m.pct7d === null || m.pct7d < ALERT_RULES.momentumMinPct) return null;
+  if (!m.lastDay || now - Date.parse(m.lastDay + 'T00:00:00Z') >= 3 * 864e5) return null;
+  const week = Math.floor(now / 6048e5), own = m.ownChange7d;
+  return { kind: 'competitor_growth', key: `competitor_growth:${m.handle}:w${week}`,
+    title: `@${m.handle} is growing faster than you`,
+    body: `Competitor @${m.handle} gained ${nice(m.followersChange7d)} followers this week; you ${own < 0 ? 'lost' : 'gained'} ${nice(Math.abs(own))}. Public metrics only: their reach and comment text are private, so this compares follower counts.`,
+    watch: 'Follower change per week, theirs vs yours' };
 }
 
 // Roadmap O.4. Progress towards the stored goal. Pure: profile = business_profile fields, m = pageMetrics().
