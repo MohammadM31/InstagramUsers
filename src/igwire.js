@@ -13,6 +13,7 @@ import { makeIgSync } from './igsync.js';
 import { makeIgAccount } from './igaccount.js';
 import { makeCompliance } from './igcompliance.js';
 import { makeDismissals } from './dismissals.js';
+import { makeComments } from './comments.js';
 
 export const graph = makeGraph();
 export const keys = {
@@ -30,3 +31,4 @@ export const igSync = makeIgSync({
 });
 export const compliance = makeCompliance({ q, keys });
 export const dismissals = makeDismissals({ q });
+export const comments = makeComments({ q, graph, getIgCreds }); // A.2

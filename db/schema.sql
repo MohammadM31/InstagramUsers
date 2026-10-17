@@ -87,3 +87,11 @@ CREATE TABLE IF NOT EXISTS saved_responses(id serial PRIMARY KEY,user_id uuid NO
 CREATE UNIQUE INDEX IF NOT EXISTS saved_responses_orig ON saved_responses(user_id,md5(original));
 CREATE INDEX IF NOT EXISTS saved_responses_user ON saved_responses(user_id,updated_at DESC);
 
+
+-- ===== A.2 post comments (idempotent) =====
+-- Third-party text and usernames, kept 90 days (decision D6) by the retention job. Unique per (user, comment): a global unique on ig_comment_id would let one user's row block another's.
+-- Cascades with the user and with the post; in the GDPR export. likes NULL = Instagram did not return it.
+CREATE TABLE IF NOT EXISTS post_comments(id serial PRIMARY KEY,user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,post_id int NOT NULL REFERENCES posts ON DELETE CASCADE,ig_comment_id text NOT NULL,
+  username text,text text NOT NULL,likes int,posted_at timestamptz NOT NULL,owner_replied boolean NOT NULL DEFAULT false,fetched_at timestamptz NOT NULL DEFAULT now(),UNIQUE(user_id,ig_comment_id));
+CREATE INDEX IF NOT EXISTS post_comments_post ON post_comments(post_id,posted_at DESC);
+CREATE INDEX IF NOT EXISTS post_comments_age ON post_comments(posted_at);

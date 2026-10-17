@@ -27,6 +27,14 @@ http.createServer((req, res) => {
     if (metric === 'follower_demographics') return send({ data: [{ name: 'follower_demographics', total_value: { breakdowns: [{ dimension_keys: [q.get('breakdown')], results: [{ dimension_values: [q.get('breakdown') === 'age' ? '25-34' : 'US'], value: 300 }] }] } }] });
     if (metric === 'online_followers') return send({ data: [{ name: 'online_followers', values: [{ value: { 9: 40, 18: 120 }, end_time: new Date().toISOString() }] }] });
   }
+  // ---- A.2 comments (fixture timestamps are shifted so the newest post is always "today": anchor 2026-10-14T14:30Z, just after the newest fixture comment) ----
+  const cm = p.match(/^\/(\w+)\/comments$/);
+  if (cm) {
+    if (cm[1] === 'M_NOCOMMENTS') return send({ error: { message: 'mock: comments are turned off for this media', code: 100 } }, 400);
+    const shift = Date.now() - Date.parse('2026-10-14T14:30:00Z');
+    const moved = o => JSON.parse(JSON.stringify(o), (k, v) => (k === 'timestamp' && typeof v === 'string' && Date.parse(v) > Date.parse('2026-09-01') ? new Date(Date.parse(v) + shift).toISOString() : v));
+    return send(cm[1] === 'M3' ? moved(fx(q.get('after') === 'CC1' ? 'comments_M3_p2' : 'comments_M3_p1')) : fx('comments_empty'));
+  }
   const m = p.match(/^\/(\w+)\/insights$/);
   if (m) return send(m[1] === 'M3' ? fx('insights_reel') : m[1] === 'M2' ? fx('insights_feed') : fx('insights_core'));
   send({ error: { message: 'mock: unknown path ' + p, code: 100 } }, 404);

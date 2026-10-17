@@ -1,5 +1,5 @@
 import './loadenv.js'; // first import: cache.js and db.js read REDIS_URL / DATABASE_URL when they load
-import {startNotifications} from './notifications.js';import {igConnect,igSync,getIgCreds,graph} from './igwire.js';import {Worker} from 'bullmq';import {redis,cached} from './cache.js';import {q,db} from './db.js';import {generateImage} from './images.js';import {makeProcessImport} from './importjob.js';import {keyFor} from './keys.js';import {validateEnv} from './config.js';import {startSnapshots} from './snapshots.js';
+import {startNotifications} from './notifications.js';import {startComments} from './comments.js';import {igConnect,igSync,getIgCreds,graph,comments} from './igwire.js';import {Worker} from 'bullmq';import {redis,cached} from './cache.js';import {q,db} from './db.js';import {generateImage} from './images.js';import {makeProcessImport} from './importjob.js';import {keyFor} from './keys.js';import {validateEnv} from './config.js';import {startSnapshots} from './snapshots.js';
 const DISCLAIMER='Public data only. User confirmed ToS at signup; scrape logged for audit.';
 async function fetchProfile(handle,uid){
  const cr=await getIgCreds(uid); // per-user credentials (A.1a). Throws IgNotConnected when a connected account needs reconnecting: fail loud, no demo data.
@@ -48,6 +48,7 @@ export function startWorker(){
  setInterval(()=>q('DELETE FROM competitor_posts WHERE expires_at<now()').catch(()=>{}),36e5); // 30-day retention
  startSnapshots(q); // 2.1: daily post snapshots + per-user baseline
  startNotifications(q); // 2.3: hourly alert detection against the baseline
+ startComments(comments); // A.2: comments every 3 h (recent posts first), 90-day retention, unanswered-questions alert
  return w;}
 if(process.argv[1].endsWith('worker.js')){validateEnv();startWorker()}
 /* ---- publisher: runs every 30s, publishes due posts ---- */

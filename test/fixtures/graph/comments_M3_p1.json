@@ -1,0 +1,7 @@
+{"data":[
+ {"id":"C1","text":"Love this! 😍","username":"fan1","timestamp":"2026-10-14T10:00:00+0000","like_count":3},
+ {"id":"C2","text":"How much is the large one?","username":"shopper","timestamp":"2026-10-14T10:20:00+0000","like_count":0},
+ {"id":"C3","text":"Where can I buy?","username":"shopper2","timestamp":"2026-10-14T11:00:00+0000","like_count":1,"replies":{"data":[{"id":"R1","username":"Studio.Example","timestamp":"2026-10-14T11:30:00+0000"}]}},
+ {"id":"C4","text":"Thanks everyone!","username":"studio.example","timestamp":"2026-10-14T11:35:00+0000","like_count":2},
+ {"id":"C5","text":"Overpriced and bad quality","username":"hater","timestamp":"2026-10-14T12:00:00+0000"}],
+ "paging":{"cursors":{"after":"CC1"},"next":"https://graph.example/next1"}}
