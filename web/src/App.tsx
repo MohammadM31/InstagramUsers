@@ -17,23 +17,50 @@ import {ICONS} from './icons';
 import {IgBadge} from './pages/InstagramCard';
 import {parseIgRedirect} from './ig';
 
-const IGR=parseIgRedirect(); // /?ig=connected|error&reason=... after the Instagram login (A.1d); read once at load
+const IGR = parseIgRedirect(); // /?ig=connected|error&reason=... after the Instagram login
 
-// 'Dashboard' is now the Command Center (pages/Dashboard.tsx is no longer routed). CommandCenter takes props, hence ComponentType<any>.
-const PAGES:Record<string,ComponentType<any>>={Dashboard:CommandCenter,Statistics:Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,'Finance & Capital':Finance,Settings,Roadmap};
+const PAGES:Record<string,ComponentType<any>> = {
+  Dashboard: CommandCenter,
+  Statistics: Analytics,
+  Competitors,
+  'Content AI': Content,
+  Scheduling: Schedule,
+  'Finance & Capital': Finance,
+  Settings,
+  Roadmap
+};
 
 export default function App(){
-  const[t,setT]=useState(tok()),[p,setP]=useState(IGR?'Settings':'Dashboard'),[igMsg,setIgMsg]=useState(IGR),[open,setOpen]=useState(false),[ob,setOb]=useState<'loading'|'needed'|'ok'>('loading'),
-    [dk,setDk]=useState(()=>localStorage.getItem('theme')?localStorage.getItem('theme')==='dark':matchMedia('(prefers-color-scheme:dark)').matches);
-  useEffect(()=>{document.documentElement.dataset.theme=dk?'dark':'light';localStorage.setItem('theme',dk?'dark':'light')},[dk]);
+  const [t,setT] = useState(tok());
+  const [p,setP] = useState(IGR ? 'Settings' : 'Dashboard');
+  const [igMsg,setIgMsg] = useState(IGR);
+  const [open,setOpen] = useState(false);
+  const [ob,setOb] = useState<'loading'|'needed'|'ok'>('loading');
+  const [dk,setDk] = useState(()=>localStorage.getItem('theme') ? localStorage.getItem('theme')==='dark' : matchMedia('(prefers-color-scheme:dark)').matches);
+
+  useEffect(()=>{document.documentElement.dataset.theme = dk ? 'dark' : 'light';localStorage.setItem('theme', dk ? 'dark' : 'light')},[dk]);
   useEffect(()=>{if(IGR)history.replaceState(null,'',location.pathname)},[]);
-  // O.1: new accounts see the setup wizard first. Existing and demo users are marked complete by the server. If the check fails, never block the app.
-  useEffect(()=>{if(!t){setOb('loading');return}let live=true;api<{completed:boolean}>('/onboarding').then(d=>live&&setOb(d.completed?'ok':'needed')).catch(()=>live&&setOb('ok'));return()=>{live=false}},[t]);
-  useEffect(()=>{const k=(e:KeyboardEvent)=>e.key==='Escape'&&setOpen(false);addEventListener('keydown',k);return()=>removeEventListener('keydown',k)},[]);
-  if(!t)return <Login onAuth={()=>setT(tok())}/>;
-  if(ob==='loading')return <div className="st" style={{margin:24}}>Loading…</div>;
-  if(ob==='needed')return <Onboarding igMsg={igMsg} onDone={()=>setOb('ok')}/>;
-  const P=PAGES[p],cc=p==='Dashboard',logout=()=>{localStorage.removeItem('t');setT('')};
+  
+  // O.1: new accounts see the setup wizard first.
+  useEffect(()=>{
+    if(!t){setOb('loading');return}
+    let live=true;
+    api<{completed:boolean}>('/onboarding').then(d=>live&&setOb(d.completed?'ok':'needed')).catch(()=>live&&setOb('ok'));
+    return()=>{live=false}
+  },[t]);
+  
+  useEffect(()=>{
+    const k=(e:KeyboardEvent)=>e.key==='Escape'&&setOpen(false);
+    addEventListener('keydown',k);
+    return()=>removeEventListener('keydown',k)
+  },[]);
+
+  if(!t) return <Login onAuth={()=>setT(tok())}/>;
+  if(ob==='loading') return <div className="st" style={{margin:24}}>Loading…</div>;
+  if(ob==='needed') return <Onboarding igMsg={igMsg} onDone={()=>setOb('ok')}/>;
+
+  const P=PAGES[p], cc=p==='Dashboard', logout=()=>{localStorage.removeItem('t');setT('')};
+  
   return <div className={'shell'+(open?' drawer-open':'')}>
     <aside className="rail">
       <div className="logo">R</div>
@@ -53,8 +80,11 @@ export default function App(){
         <span style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}><IgBadge onClick={()=>setP('Settings')}/><Notifications/></span>
       </header>
       {igMsg&&<div className={'banner '+(igMsg.ok?'ok':'bad')} role="status"><span>{igMsg.text}</span><button className="btn g s" onClick={()=>setIgMsg(null)}>Close</button></div>}
-      {cc?<CommandCenter pages={Object.keys(PAGES)} page={p} go={setP} onLogout={logout}/>:<P/>}
+      
+      {/* CommandCenter no longer needs props, it accesses global state via API */}
+      {cc ? <CommandCenter/> : <P/>}
     </main>
+    
     {/* The global bottom chat is hidden on the Command Center, which embeds its own. */}
-    {!cc&&<Assistant isEmbedded={false}/>}
+    {!cc && <Assistant isEmbedded={false}/>}
   </div>}
