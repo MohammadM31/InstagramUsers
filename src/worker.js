@@ -33,8 +33,10 @@ async function igOwnPosts(uid){ // legacy path for POST /import/posts {source:'i
 // but only the metrics the file actually contained: a missing column never overwrites a stored value.
 export const processImport=makeProcessImport({db,q,own:igOwnPosts});
 /* ---- 0.5 generateImage: runs off the request path; GET /api/content/image/:jobId reads the result ---- */
-// SWAP POINT: results are base64 data URIs stored in the job's return value (1h TTL). Replace with an S3/CDN upload and return a URL here.
-export async function processImage({userId,params}){return{images:await generateImage({...params,uid:userId})}}
+// C.1: results stay base64 data URIs in the job's return value (1h TTL, unchanged). When the S3_* variables are set, each image is also converted to JPEG
+// and uploaded, and the result gains `urls` (public JPEG urls, see storage.js / imageresult.js). No S3_* variables = exactly the old result.
+import {makeStorage} from './storage.js';import {makeProcessImage} from './imageresult.js';
+export const processImage=makeProcessImage({generate:generateImage,storage:makeStorage()});
 // A.1: token refresh every 6 h (acts only on tokens with <15 days left) and a 10-minute tick that syncs accounts whose staggered daily slot has passed.
 function startIgJobs(){
  const guard=(n,f)=>()=>f().then(r=>{if(r&&(r.due||r.refreshed||r.reconnect))console.log(n,r)}).catch(e=>console.error(n,e.message));

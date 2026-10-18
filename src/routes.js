@@ -38,7 +38,7 @@ post('/content/image',needKey,limit('image',20,3600),async(req,res)=>{const b=re
  const params={prompt,ratio:b.ratio,model:b.model,overlayText:b.overlayText?String(b.overlayText).slice(0,120):undefined,color:b.color,n:Math.min(Number(b.n)||1,2),referenceImage:b.referenceImage};
  const jobId=await enqueueImage(req.uid,params);res.status(202).json({jobId})}); // 503 if no Replicate key (see imagejobs.js)
 get('/content/image/:jobId',async(req,res)=>{const j=await imageQ.getJob(req.params.jobId);if(!j||j.data.userId!==req.uid)return res.sendStatus(404);
- const st=await j.getState();if(st==='completed')return res.json({status:'done',images:j.returnvalue.images});
+ const st=await j.getState();if(st==='completed')return res.json({status:'done',images:j.returnvalue.images,...(j.returnvalue.urls?{urls:j.returnvalue.urls}:{})}); // C.1: urls only when storage is configured (additive)
  if(st==='failed'){let r=j.failedReason;if(!r){await new Promise(x=>setTimeout(x,150));r=(await imageQ.getJob(req.params.jobId))?.failedReason} // BullMQ can flip state before the reason is written
   return res.json({status:'failed',error:r||'generation failed'})}res.json({status:'pending'})});
 /* settings: keys (0.4). Stored keys are now actually used by assistant, captions, hashtags and images (see keys.js). */

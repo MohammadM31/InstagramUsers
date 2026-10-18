@@ -1,6 +1,7 @@
 import './loadenv.js'; // load ./.env first (no --env-file needed)
 // Boot-time environment validation (roadmap 0.2). Call validateEnv() at the top of every entry point.
 // Pure: takes an env object, returns a list of problems, so it is unit-testable.
+import { storageSettings } from './storage.js';
 export const DEV_SECRET = 'dev-secret-change-me';
 
 export function envProblems(env = process.env, { needDb = true } = {}) {
@@ -15,6 +16,7 @@ export function envProblems(env = process.env, { needDb = true } = {}) {
   else if (!/^[0-9a-fA-F]{64}$/.test(ek)) p.push('ENCRYPTION_KEY is malformed (need exactly 64 hex characters)');
   else if (/^0{64}$/.test(ek)) p.push('ENCRYPTION_KEY is all zeros; generate a real key');
   if (needDb && !env.DATABASE_URL) p.push('DATABASE_URL is missing');
+  p.push(...storageSettings(env).problems); // C.1: a half-set S3_* config is a boot error, not a silent "no storage"
   return p;
 }
 
