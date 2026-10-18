@@ -102,3 +102,16 @@ CREATE INDEX IF NOT EXISTS post_comments_age ON post_comments(posted_at);
 CREATE TABLE IF NOT EXISTS competitor_history(id serial PRIMARY KEY,competitor_id int NOT NULL REFERENCES competitors ON DELETE CASCADE,captured_at timestamptz NOT NULL DEFAULT now(),
   followers int,posts_count int,avg_likes numeric(12,1),avg_comments numeric(12,1));
 CREATE UNIQUE INDEX IF NOT EXISTS competitor_history_day ON competitor_history(competitor_id,((captured_at AT TIME ZONE 'UTC')::date));
+
+-- C.1 follow-up (decision 97): one row per object uploaded to the image bucket (src/storedimages.js). object_key is the random name, never a
+-- personal value. user_id is SET NULL (not CASCADE) on account delete: the row must outlive the account so the purge job can still delete the
+-- bucket object. deleted_at is set once the object is gone. The GDPR export lists the user's rows (key + dates).
+CREATE TABLE IF NOT EXISTS stored_images(id serial PRIMARY KEY,user_id uuid REFERENCES users ON DELETE SET NULL,object_key text NOT NULL UNIQUE,
+  created_at timestamptz NOT NULL DEFAULT now(),deleted_at timestamptz);
+CREATE INDEX IF NOT EXISTS stored_images_due ON stored_images(created_at) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS stored_images_user ON stored_images(user_id);
+
+-- A.3 (decision 92): why the last scrape of a competitor failed, in words that are safe to show. Cleared by the next successful scrape.
+ALTER TABLE competitors ADD COLUMN IF NOT EXISTS last_error text;
+ALTER TABLE competitors ADD COLUMN IF NOT EXISTS last_error_code text;
+ALTER TABLE competitors ADD COLUMN IF NOT EXISTS last_error_at timestamptz;

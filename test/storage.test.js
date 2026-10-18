@@ -154,10 +154,10 @@ test('C.1 image job: a refused upload fails the job; a non-data-URI result is no
   await assert.rejects(makeProcessImage({ generate: async () => ['https://x/y.png'], storage: { enabled: true, uploadImage: async () => 'u' } })({ userId: 1, params: {} }), /not a data URI/);
 });
 
-test('C.1 wiring guards: worker uses the factory, route adds urls only when present, sharp is loaded lazily, no new table or dependency', () => {
+test('C.1 wiring guards: worker uses the factory, route adds urls only when present, sharp is loaded lazily, no new dependency', () => {
   const w = readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8'), r = readFileSync(new URL('../src/routes.js', import.meta.url), 'utf8');
   const s = readFileSync(new URL('../src/storage.js', import.meta.url), 'utf8'), pk = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.match(w, /export const processImage=makeProcessImage\(\{generate:generateImage,storage:makeStorage\(\)\}\)/);
+  assert.match(w, /const storage=makeStorage\(\);/); assert.match(w, /export const processImage=makeProcessImage\(\{generate:generateImage,storage,track:/);
   assert.match(r, /images:j\.returnvalue\.images,\.\.\.\(j\.returnvalue\.urls\?\{urls:j\.returnvalue\.urls\}:\{\}\)/);
   assert.ok(!/^import .*sharp/m.test(s) && /await import\('sharp'\)/.test(s), 'sharp is imported lazily so boot checks and tests need no native module');
   assert.ok(!/accessKeyId|secretAccessKey|SECRET/.test(r), 'routes never touch the credentials');

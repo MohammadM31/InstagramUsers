@@ -1,7 +1,7 @@
 // Roadmap A.3: competitor history. I/O only; the rules are pure and live in competitorintel.js and advisor.js (competitorMomentum, momentumAlert).
 // Every dependency is injected: q (db), getIgCreds (per-user Instagram credentials), enqueue (scrape queue), now.
 import { followerGrowth, competitorMomentum, momentumAlert } from './advisor.js';
-import { historyRow, PUBLIC_NOTE, utcDay } from './competitorintel.js';
+import { historyRow, PUBLIC_NOTE, utcDay, scrapeErrorInfo } from './competitorintel.js';
 
 const UPSERT = `INSERT INTO competitor_history(competitor_id,followers,posts_count,avg_likes,avg_comments) VALUES($1,$2,$3,$4,$5)
   ON CONFLICT (competitor_id,((captured_at AT TIME ZONE 'UTC')::date)) DO UPDATE SET captured_at=now(),followers=EXCLUDED.followers,
@@ -30,6 +30,14 @@ export function makeCompetitors({ q, getIgCreds = async () => null, enqueue = as
     if (!row) return { stored: false, reason: d?.source === 'demo' ? 'demo' : 'no_followers' };
     await q(UPSERT, [competitorId, row.followers, row.posts_count, row.avg_likes, row.avg_comments]);
     return { stored: true };
+  }
+
+  // Called by the scrape worker when an attempt fails. Stores a safe message (scrapeErrorInfo) for the UI; the next success clears it (worker UPDATE).
+  // Never throws: a failed bookkeeping write must not hide the original scrape error.
+  async function recordError(competitorId, err) {
+    const { code, message } = scrapeErrorInfo(err);
+    try { await q('UPDATE competitors SET last_error=$2,last_error_code=$3,last_error_at=now() WHERE id=$1', [competitorId, message, code]); return { stored: true, code }; }
+    catch { return { stored: false, code }; }
   }
 
   // GET /api/competitors/:id/history?days=30  (days 1-365). Scoped to the signed-in user.
@@ -81,5 +89,5 @@ export function makeCompetitors({ q, getIgCreds = async () => null, enqueue = as
     return res;
   }
 
-  return { record, history, scrapeDue, runMomentum };
+  return { record, history, scrapeDue, runMomentum, recordError };
 }

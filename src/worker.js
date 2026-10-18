@@ -15,7 +15,7 @@ const competitors=makeCompetitors({q,getIgCreds,enqueue:(data,jobId)=>scrapeQ.ad
 export async function processScrape({userId,competitorId,handle}){
  const d=await cached(`scrape:${userId}:${handle}`,3600,()=>fetchProfile(handle,userId)); // cache is per user: results depend on whose credentials were used // Redis TTL 1h
  await q('INSERT INTO scrape_audit(user_id,handle,source,disclaimer) VALUES($1,$2,$3,$4)',[userId,handle,d.source,DISCLAIMER]);
- await q('UPDATE competitors SET followers=$1,last_scraped=now() WHERE id=$2',[d.followers,competitorId]);
+ await q('UPDATE competitors SET followers=$1,last_scraped=now(),last_error=NULL,last_error_code=NULL,last_error_at=NULL WHERE id=$2',[d.followers,competitorId]); // a success clears the last error (decision 92)
  await q('DELETE FROM competitor_posts WHERE competitor_id=$1',[competitorId]);
  for(const p of d.posts)await q(`INSERT INTO competitor_posts(competitor_id,type,posted_at,likes,comments,caption,expires_at) VALUES($1,$2,$3,$4,$5,$6,now()+interval '30 days')`,[competitorId,p.type,p.at,p.likes,p.comments,p.caption]);
  await competitors.record(competitorId,d); // A.3: one history row per competitor per UTC day; demo data stores nothing
@@ -35,23 +35,30 @@ export const processImport=makeProcessImport({db,q,own:igOwnPosts});
 /* ---- 0.5 generateImage: runs off the request path; GET /api/content/image/:jobId reads the result ---- */
 // C.1: results stay base64 data URIs in the job's return value (1h TTL, unchanged). When the S3_* variables are set, each image is also converted to JPEG
 // and uploaded, and the result gains `urls` (public JPEG urls, see storage.js / imageresult.js). No S3_* variables = exactly the old result.
-import {makeStorage} from './storage.js';import {makeProcessImage} from './imageresult.js';
-export const processImage=makeProcessImage({generate:generateImage,storage:makeStorage()});
+import {makeStorage} from './storage.js';import {makeProcessImage} from './imageresult.js';import {makeStoredImages} from './storedimages.js';
+const storage=makeStorage();
+export const storedImages=makeStoredImages({q,storage}); // every upload is recorded so it can be exported, deleted after publish (C.2), aged out and removed with the account
+export const processImage=makeProcessImage({generate:generateImage,storage,track:(uid,url)=>storedImages.recordUrl(uid,url)});
 // A.1: token refresh every 6 h (acts only on tokens with <15 days left) and a 10-minute tick that syncs accounts whose staggered daily slot has passed.
 function startIgJobs(){
  const guard=(n,f)=>()=>f().then(r=>{if(r&&(r.due||r.refreshed||r.reconnect))console.log(n,r)}).catch(e=>console.error(n,e.message));
  setTimeout(guard('igRefresh',()=>igConnect.refreshTokens()),30000);setInterval(guard('igRefresh',()=>igConnect.refreshTokens()),216e5);
  setTimeout(guard('igSync',()=>igSync.runDue()),45000);setInterval(guard('igSync',()=>igSync.runDue()),6e5)}
+// C.1: hourly purge of stored images older than IMAGE_RETENTION_DAYS (default 30) and of images whose account was deleted.
+function startImageJobs(){
+ const guard=(n,f)=>()=>f().then(r=>{if(r&&(r.removed||r.errors))console.log(n,r)}).catch(e=>console.error(n,e.message));
+ setTimeout(guard('imagePurge',()=>storedImages.purgeDue()),300000);setInterval(guard('imagePurge',()=>storedImages.purgeDue()),36e5)}
 function startCompetitorJobs(){
  const guard=(n,f)=>()=>f().then(r=>{if(r&&(r.queued||r.created))console.log(n,r)}).catch(e=>console.error(n,e.message));
  setTimeout(guard('competitorDaily',()=>competitors.scrapeDue()),120000);setInterval(guard('competitorDaily',()=>competitors.scrapeDue()),216e5);
  setTimeout(guard('competitorMomentum',()=>competitors.runMomentum()),600000);setInterval(guard('competitorMomentum',()=>competitors.runMomentum()),36e5)}
 export function startWorker(){
- const w=new Worker('scrape',j=>processScrape(j.data).catch(e=>{throw e.code===NOT_PUBLIC_CODE?new UnrecoverableError(e.message):e}),{connection:redis,concurrency:2,limiter:{max:200,duration:3600000}}); // 200 calls/hr
+ const w=new Worker('scrape',j=>processScrape(j.data).catch(async e=>{await competitors.recordError(j.data.competitorId,e);throw e.code===NOT_PUBLIC_CODE?new UnrecoverableError(e.message):e}),{connection:redis,concurrency:2,limiter:{max:200,duration:3600000}}); // 200 calls/hr
  w.on('failed',(j,e)=>console.error('scrape failed',j?.data?.handle,e.message));
  const wi=new Worker('import',j=>processImport(j.data),{connection:redis,concurrency:2});wi.on('failed',(j,e)=>console.error('import failed',e.message));
  const wg=new Worker('image',j=>processImage(j.data),{connection:redis,concurrency:2});wg.on('failed',(j,e)=>console.error('image failed',e.message));
  const wk=new Worker('igsync',j=>igSync.syncUser(j.data.userId),{connection:redis,concurrency:1});wk.on('failed',(j,e)=>console.error('igsync failed',e.message)); // A.1b: manual 'Sync now'
+ startImageJobs(); // C.1 retention purge
  startCompetitorJobs(); // A.3: daily competitor re-scrape (6-hourly check) + hourly momentum alert
  startIgJobs(); // A.1a token refresh + A.1b staggered daily sync
  setInterval(()=>q('DELETE FROM competitor_posts WHERE expires_at<now()').catch(()=>{}),36e5); // 30-day retention

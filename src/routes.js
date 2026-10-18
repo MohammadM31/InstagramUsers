@@ -1,10 +1,11 @@
 import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {makeGoals} from './goals.js';import {makeResponses} from './responses.js';import {makeOnboarding} from './onboarding.js';import {makeBrandVoice,currentVoice,captionPrompt,hashtagPrompt} from './brandvoice.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';import {makeNotifications} from './notifications.js';import {igConnect,igSync,dismissals,comments} from './igwire.js';
 import {makeCompetitors} from './competitors.js';
-import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ,importQ,imageQ} from './queue.js';import {limit,hit} from './ratelimit.js';import {llmConfig,keyFor} from './keys.js';import {parseCsv} from './csv.js';import {MAX_ROWS} from './importer.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';
+import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ,importQ,imageQ} from './queue.js';import {limit,hit} from './ratelimit.js';import {llmConfig,keyFor} from './keys.js';import {parseCsv} from './csv.js';import {MAX_ROWS} from './importer.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';import {makeStorage} from './storage.js';import {makeStoredImages} from './storedimages.js';
 export const api=Router();api.use(requireAuth);
 const wrap=f=>(req,res,next)=>Promise.resolve(f(req,res,next)).catch(next); // Express 4 needs this for async errors
 const hs=f=>f.map((h,i)=>i===f.length-1?wrap(h):h); // variadic: route(path, ...middleware, handler); only the last one is async-wrapped
 const get=(p,...f)=>api.get(p,...hs(f)),post=(p,...f)=>api.post(p,...hs(f)),put=(p,...f)=>api.put(p,...hs(f)),del=(p,...f)=>api.delete(p,...hs(f));
+const storedImages=makeStoredImages({q,storage:makeStorage()}); // C.1: tracks bucket objects (account delete, GDPR export)
 const pct=(a,b)=>b?+((a-b)/b*100).toFixed(1):0;
 const L30="posted_at>now()-interval '30 days'",P30="posted_at BETWEEN now()-interval '60 days' AND now()-interval '30 days'";
 get('/dashboard',async(req,res)=>{
@@ -68,8 +69,10 @@ get('/gdpr/export',async(req,res)=>{const o={};for(const t of['posts','competito
  o.ig_accounts=await q('SELECT user_id,ig_user_id,page_id,username,account_type,scopes,token_expires_at,status,followers_at_connect,last_sync_at,last_error,connected_at FROM ig_accounts WHERE user_id=$1',[req.uid]);o.scheduled_posts=await q('SELECT id,caption,platforms,scheduled_at,status,error,published_at FROM scheduled_posts WHERE user_id=$1',[req.uid]);o.api_keys=await q('SELECT name FROM api_keys WHERE user_id=$1',[req.uid]);
  for(const t of['follower_history','ig_account_daily','ig_audience','brand_voice','voice_samples','post_comments'])o[t]=await q(`SELECT * FROM ${t} WHERE user_id=$1`,[req.uid]);o.priority_dismissals=await q('SELECT tip_key,until FROM priority_dismissals WHERE user_id=$1',[req.uid]);
  o.business_profile=await q('SELECT * FROM business_profile WHERE user_id=$1',[req.uid]);o.post_snapshots=await q('SELECT s.* FROM post_snapshots s JOIN posts p ON p.id=s.post_id WHERE p.user_id=$1 ORDER BY s.post_id,s.captured_at',[req.uid]);o.metrics_baseline=await q('SELECT * FROM metrics_baseline WHERE user_id=$1',[req.uid]);
+ o.stored_images=await q('SELECT * FROM stored_images WHERE user_id=$1 ORDER BY id',[req.uid]); // C.1: object keys + dates of this user's uploaded images
  o.competitor_history=await q('SELECT h.* FROM competitor_history h JOIN competitors c ON c.id=h.competitor_id WHERE c.user_id=$1 ORDER BY h.competitor_id,h.captured_at',[req.uid]);res.json(o)});
-del('/gdpr/account',async(req,res)=>{await q('DELETE FROM users WHERE id=$1',[req.uid]);res.json({deleted:true})});
+del('/gdpr/account',async(req,res)=>{const im=await storedImages.purgeUser(req.uid); // C.1: remove this user's bucket objects first (never throws); leftovers lose their user_id and the hourly purge finishes them
+ await q('DELETE FROM users WHERE id=$1',[req.uid]);res.json({deleted:true,...(im.total?{storedImages:{removed:im.removed,pending:im.pending}}:{})})});
 /* analytics */
 const patch=(p,...f)=>api.patch(p,...hs(f));
 get('/analytics/heatmap',async(req,res)=>res.json(await q(`SELECT extract(dow from posted_at)::int d,extract(hour from posted_at)::int h,round(avg((coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))*100.0/NULLIF(reach,0)),2)::float er,count(*)::int n FROM posts WHERE user_id=$1 GROUP BY 1,2`,[req.uid])));

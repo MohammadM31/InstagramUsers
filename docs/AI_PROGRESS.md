@@ -285,3 +285,15 @@ Last checked: 2026-10-17 | Repository revision: archive, no .git (InstagramUsers
 - Open items for the user: decisions 93-98 are PROPOSED; 97 is a data-model question (see AI_DECISIONS.md).
 - Exact next action: apply phase-C1.diff, `npm install`, `npm test`, then the live check in the C.1 row with a real bucket.
 - Status: C.1 delivered for review; paused, awaiting explicit confirmation before the next item.
+
+## Checkpoint 2026-10-18 (session 14: C.1 follow-up, A.3 last_error, title)
+Last checked: 2026-10-18 | Repository revision: not provided (the hash placeholder in the user's message was empty); work is phase-C1-followup.diff on top of the applied C.1 patch | Current item: C.1 follow-up (decision 97) | Overall state: Gate A.1 not passed (A.0 in progress); Gate O walkthrough still the user's.
+- Completed: stored_images (schema, record on upload, retention job, account-delete purge, GDPR export, `releaseAfterPublish` hook for C.2); IMAGE_RETENTION_DAYS; competitors.last_error (+_code, +_at), safe messages, Status column; index.html title.
+- Files: NEW src/storedimages.js, test/storedimages.test.js. CHANGED db/schema.sql (additive, idempotent), src/worker.js, src/routes.js, src/imageresult.js, src/competitors.js, src/competitorintel.js, src/config.js, test/storage.test.js (one guard line), package.json (test list), .env.example, web/index.html, web/src/pages/Competitors.tsx, docs.
+- Schema changes and how applied: appended to db/schema.sql; applied by `npm run migrate` (run twice). The new SQL has NOT been run against Postgres in this session.
+- Commands run (sandbox, no network/Postgres/Redis): `npm test` 300/300 (288 before + 12 new), `node --check src/*.js` 0 failures; 14 deliberate breakages caught. NOT run: migrate, web build, smoke scripts, a real bucket, a browser.
+- Status changes: C.1 stays IMPLEMENTED - UNVERIFIED. A.3 stays IMPLEMENTED - UNVERIFIED. O/4.2/D.1/A.2 stay as the ledger says until the user's browser evidence.
+- User-side: paste `git rev-parse HEAD` and the post_snapshots day count; A.0 and the Gate O walkthrough.
+- Exact next action: apply the patch, `npm run migrate` twice, `npm test`, `cd web && npm run build`, then the checks listed in the reply.
+- Status: paused, awaiting explicit confirmation of the next item (3.x if 3+ snapshot days, otherwise C.4).
+

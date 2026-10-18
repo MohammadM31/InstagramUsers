@@ -39,3 +39,14 @@ export function classifyDiscoveryError(err, handle) {
   if (err.name === 'IgError' && (err.code === 110 || /invalid user id|not a business|cannot find|does not exist/i.test(String(err.message)))) return notPublicError(handle);
   return err;
 }
+
+// A.3 (decision 92): a failed scrape as { code, message } for competitors.last_error. The message is written here, never copied from Graph or the
+// network, so nothing internal (tokens, urls, stack text) can reach the screen. Unknown failures get a generic line and the code 'scrape_failed'.
+export function scrapeErrorInfo(err) {
+  if (err?.code === NOT_PUBLIC_CODE) return { code: NOT_PUBLIC_CODE, message: String(err.message).slice(0, 300) };
+  if (err?.constructor?.name === 'IgNotConnected') return { code: 'instagram_reconnect', message: 'Instagram needs to be reconnected (Settings > Instagram) before competitors can be updated.' };
+  if (err?.tokenInvalid) return { code: 'instagram_reconnect', message: 'Instagram rejected the saved connection. Reconnect it in Settings > Instagram.' };
+  if (err?.permission) return { code: 'instagram_permission', message: 'Instagram did not allow this lookup (a permission is missing). Reconnect and accept all permissions.' };
+  if (err?.rateLimited) return { code: 'instagram_rate_limited', message: 'Instagram rate limit reached. It will be tried again later.' };
+  return { code: 'scrape_failed', message: 'The last update failed. It will be tried again.' };
+}
