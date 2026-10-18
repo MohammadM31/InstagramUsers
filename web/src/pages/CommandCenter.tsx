@@ -30,7 +30,7 @@ export default function CommandCenter(){
   // Trigger the daily report. We pass isReport: true so the Assistant 
   // bypasses the AI text router and generates a structured data report instead.
   const triggerReport = () => {
-    setPrefill({ id: Date.now(), text: "", isReport: true });
+    setPrefill({ id: Date.now(), text: "Generate my daily report. Give me a summary of my account health, my top priorities right now, and what I should focus on today." });
   };
 
   return (

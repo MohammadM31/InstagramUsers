@@ -1,0 +1,518 @@
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+index 1680aba..1814b21 100644
+--- a/web/src/App.tsx
++++ b/web/src/App.tsx
+@@ -10,15 +10,18 @@ import Schedule from './pages/Schedule';
+ import Settings from './pages/Settings';
+ import Roadmap from './pages/Roadmap';
+ import Finance from './pages/Finance';
++import NotBuilt from './pages/NotBuilt';
+ import Assistant from './Assistant';
+-import Notifications from './Notifications';
++import {useNotifications,Bell,AlertBanner} from './Notifications';
+ import Onboarding from './pages/Onboarding';
+-import {ICONS} from './icons';
++import {Icon} from './icons';
++import type {IconName} from './icons';
+ import {IgBadge} from './pages/InstagramCard';
+ import {parseIgRedirect} from './ig';
+ 
+ const IGR = parseIgRedirect(); // /?ig=connected|error&reason=... after the Instagram login
+ 
++const ANALYTICS_HINT = {label:'Open Analytics',page:'Statistics',why:'Marketing method estimates live there.'};
+ const PAGES:Record<string,ComponentType<any>> = {
+   Dashboard: CommandCenter,
+   Statistics: Analytics,
+@@ -27,20 +30,47 @@ const PAGES:Record<string,ComponentType<any>> = {
+   Scheduling: Schedule,
+   'Finance & Capital': Finance,
+   Settings,
+-  Roadmap
++  Roadmap,
++  // Design D sidebar entries that have no page yet: honest empty states.
++  Marketing: (p:any)=><NotBuilt name="Marketing" see={ANALYTICS_HINT} {...p}/>,
++  CRM: (p:any)=><NotBuilt name="CRM" {...p}/>,
++  Ads: (p:any)=><NotBuilt name="Ads" {...p}/>,
++  Collabs: (p:any)=><NotBuilt name="Collabs" see={ANALYTICS_HINT} {...p}/>
+ };
+ 
++type NavItem={label:string;page:string;icon:IconName};
++// Sidebar order from Design D. `page` is the key in PAGES, so App's page state is unchanged.
++const NAV:NavItem[] = [
++  {label:'Business',page:'Dashboard',icon:'home'},
++  {label:'Marketing',page:'Marketing',icon:'marketing'},
++  {label:'CRM',page:'CRM',icon:'crm'},
++  {label:'Ads',page:'Ads',icon:'ads'},
++  {label:'Collabs',page:'Collabs',icon:'collabs'},
++  {label:'Analytics',page:'Statistics',icon:'analytics'},
++  {label:'Posts',page:'Content AI',icon:'posts'}
++];
++// Existing pages that Design D has no slot for. They stay reachable here so nothing disappears in the reskin.
++const MORE:NavItem[] = [
++  {label:'Competitors',page:'Competitors',icon:'Competitors'},
++  {label:'Scheduling',page:'Scheduling',icon:'Scheduling'},
++  {label:'Finance',page:'Finance & Capital',icon:'Finance & Capital'},
++  {label:'Roadmap',page:'Roadmap',icon:'Roadmap'}
++];
++// Pages that draw the 320px right column. Phase 2 puts the Daily report card there.
++const RIGHT_COLUMN = new Set(['Dashboard']);
++
+ export default function App(){
+   const [t,setT] = useState(tok());
+   const [p,setP] = useState(IGR ? 'Settings' : 'Dashboard');
+   const [igMsg,setIgMsg] = useState(IGR);
+-  const [open,setOpen] = useState(false);
+   const [ob,setOb] = useState<'loading'|'needed'|'ok'>('loading');
++  const [name,setName] = useState('');
+   const [dk,setDk] = useState(()=>localStorage.getItem('theme') ? localStorage.getItem('theme')==='dark' : matchMedia('(prefers-color-scheme:dark)').matches);
++  const notif = useNotifications(!!t&&ob==='ok');
+ 
+   useEffect(()=>{document.documentElement.dataset.theme = dk ? 'dark' : 'light';localStorage.setItem('theme', dk ? 'dark' : 'light')},[dk]);
+   useEffect(()=>{if(IGR)history.replaceState(null,'',location.pathname)},[]);
+-  
++
+   // O.1: new accounts see the setup wizard first.
+   useEffect(()=>{
+     if(!t){setOb('loading');return}
+@@ -48,43 +78,58 @@ export default function App(){
+     api<{completed:boolean}>('/onboarding').then(d=>live&&setOb(d.completed?'ok':'needed')).catch(()=>live&&setOb('ok'));
+     return()=>{live=false}
+   },[t]);
+-  
++
++  // The sidebar's profile row shows the display name from the profile (no name set: it just says "Profile").
+   useEffect(()=>{
+-    const k=(e:KeyboardEvent)=>e.key==='Escape'&&setOpen(false);
+-    addEventListener('keydown',k);
+-    return()=>removeEventListener('keydown',k)
+-  },[]);
++    if(!t||ob!=='ok')return;
++    let live=true;
++    api<{display_name?:string}>('/profile').then(d=>live&&setName((d.display_name||'').trim())).catch(()=>{});
++    return()=>{live=false}
++  },[t,ob]);
+ 
+   if(!t) return <Login onAuth={()=>setT(tok())}/>;
+   if(ob==='loading') return <div className="st" style={{margin:24}}>Loading…</div>;
+   if(ob==='needed') return <Onboarding igMsg={igMsg} onDone={()=>setOb('ok')}/>;
+ 
+-  const P=PAGES[p], cc=p==='Dashboard', logout=()=>{localStorage.removeItem('t');setT('')};
+-  
+-  return <div className={'shell'+(open?' drawer-open':'')}>
+-    <aside className="rail">
+-      <div className="logo">R</div>
+-      <button className="ib" aria-label="Menu" title="Menu" onClick={()=>setOpen(o=>!o)}>{ICONS.menu}</button>
+-      <button className="ib" aria-label="Toggle theme" title="Toggle theme" style={{marginTop:'auto'}} onClick={()=>setDk(d=>!d)}>{dk?ICONS.sun:ICONS.moon}</button>
+-      <button className="ib" aria-label="Log out" title="Log out" onClick={logout}>{ICONS.logout}</button>
++  const P=PAGES[p], cc=p==='Dashboard', rc=RIGHT_COLUMN.has(p), logout=()=>{localStorage.removeItem('t');setT('')};
++  const item=(n:NavItem,sm=false)=><button key={n.page} className={'navb'+(sm?' sm':'')} aria-current={n.page===p?'page':undefined} onClick={()=>setP(n.page)}><Icon name={n.icon} size={sm?20:24}/>{n.label}</button>;
++
++  return <div className={'shell'+(rc?' has-rc':'')}>
++    <aside className="side" aria-label="Sidebar">
++      <button className="wm" onClick={()=>setP('Dashboard')} aria-label="RaidTechs home">RaidTechs</button>
++      <nav className="nav" aria-label="Main">
++        {NAV.map(n=>item(n))}
++        <div className="navg">More</div>
++        {MORE.map(n=>item(n,true))}
++      </nav>
++      <div className="sidefoot">
++        {item({label:'Settings',page:'Settings',icon:'settings'})}
++        <button className="navb prof" aria-current={p==='Settings'?'page':undefined} onClick={()=>setP('Settings')}>
++          <span className="rg"><i>{name?name[0].toUpperCase():<Icon name="user" size={20}/>}</i></span>{name||'Profile'}</button>
++        <button className="navb out" onClick={logout}><Icon name="logout"/>Logout</button>
++      </div>
+     </aside>
+-    <div className={'scrim'+(open?' on':'')} onClick={()=>setOpen(false)}/>
+-    <nav className={'drawer'+(open?' open':'')} aria-hidden={!open}>
+-      <h2>Explore</h2>
+-      {Object.keys(PAGES).map(k=><button key={k} className={k===p?'on':''} onClick={()=>{setP(k);setOpen(false)}}>{ICONS[k]}{k}</button>)}
+-    </nav>
+-    <main className={cc?'cc-main':undefined}>
+-      <header className="top">
+-        <span className="wm">RaidTechs</span>
+-        <span className="mu">{p}</span>
+-        <span style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}><IgBadge onClick={()=>setP('Settings')}/><Notifications/></span>
++
++    <main className={'ctr'+(cc?' cc-main':'')}>
++      <header className="tb">
++        <div className="barl">
++          <Bell n={notif}/>
++          {/* The Business page shows its own connection pill. */}
++          {!cc&&<IgBadge onClick={()=>setP('Settings')}/>}
++          {/* Temporary: Phase 5 replaces this with the System / Light / Dark switch in Settings. */}
++          <button className="ib" aria-label="Toggle theme" title="Toggle theme" onClick={()=>setDk(d=>!d)}><Icon name={dk?'sun':'moon'}/></button>
++        </div>
++        <div className="barr"><AlertBanner n={notif}/></div>
+       </header>
+-      {igMsg&&<div className={'banner '+(igMsg.ok?'ok':'bad')} role="status"><span>{igMsg.text}</span><button className="btn g s" onClick={()=>setIgMsg(null)}>Close</button></div>}
+-      
+-      {/* CommandCenter no longer needs props, it accesses global state via API */}
+-      {cc ? <CommandCenter/> : <P/>}
++      <div className="page">
++        {igMsg&&<div className={'banner '+(igMsg.ok?'ok':'bad')} role="status"><span>{igMsg.text}</span><button className="btn g s" onClick={()=>setIgMsg(null)}>Close</button></div>}
++        {/* CommandCenter no longer needs props, it accesses global state via API */}
++        {cc ? <CommandCenter/> : <P go={setP}/>}
++      </div>
+     </main>
+-    
++
++    {rc&&<aside className="rcol" id="rcol" aria-label="Daily report"/>}
++
+     {/* The global bottom chat is hidden on the Command Center, which embeds its own. */}
+     {!cc && <Assistant isEmbedded={false}/>}
+-  </div>}
+\ No newline at end of file
++  </div>}
+diff --git a/web/src/Notifications.tsx b/web/src/Notifications.tsx
+index c7ff942..06bbd50 100644
+--- a/web/src/Notifications.tsx
++++ b/web/src/Notifications.tsx
+@@ -1,25 +1,50 @@
+-// Roadmap 2.3: bell with an unread badge and the latest 20 notifications. Every item can be marked read or dismissed.
++// Roadmap 2.3: notifications. One fetch (useNotifications) feeds two pieces of the top bar:
++//   <Bell/>        heart icon with an unread badge and the latest 20 notifications; every item can be marked read or dismissed.
++//   <AlertBanner/> the newest unread reach/engagement drop, shown as a dismissible banner. It only appears when the server has such an alert.
+ import {useCallback,useEffect,useState} from 'react';
+ import {api} from './api';
+-import {ICONS} from './icons';
++import {Icon} from './icons';
++import type {IconName} from './icons';
+ 
+ type N={id:number;kind:string;title:string;body:string;watch?:string|null;created_at:string;read_at:string|null};
++export type Notif=ReturnType<typeof useNotifications>;
+ const ago=(v:string)=>{const m=Math.round((Date.now()-new Date(v).getTime())/6e4);return m<1?'just now':m<60?m+' min ago':m<1440?Math.round(m/60)+' h ago':Math.round(m/1440)+' d ago'};
++const KIND_ICON:Record<string,IconName>={reach_drop:'trendDown',er_drop:'trendDown',best_post:'trendUp',competitor:'crm',competitor_growth:'crm'};
++const DROPS=['reach_drop','er_drop'];
++const SEEN_KEY='rt:alert:dismissed';
+ 
+-export default function Notifications(){
+-  const[d,setD]=useState<{unread:number;items:N[]}>({unread:0,items:[]}),[open,setOpen]=useState(false),[err,setErr]=useState('');
++// `enabled` must be false on the login and onboarding screens: a 401 from api() reloads the page, which would loop on the login form.
++export function useNotifications(enabled:boolean){
++  const[d,setD]=useState<{unread:number;items:N[]}>({unread:0,items:[]}),[err,setErr]=useState('');
+   const load=useCallback(()=>{api('/notifications').then(x=>{setD(x);setErr('')}).catch(e=>setErr(e.message))},[]);
+-  useEffect(()=>{load();const t=setInterval(load,60000);return()=>clearInterval(t)},[load]);
+-  const act=(p:string,o:{method:string;body?:any})=>api(p,o).then(load).catch(e=>setErr(e.message));
++  useEffect(()=>{if(!enabled)return;load();const t=setInterval(load,60000);return()=>clearInterval(t)},[enabled,load]);
++  const act=useCallback((p:string,o:{method:string;body?:any})=>api(p,o).then(load).catch(e=>setErr(e.message)),[load]);
++  return{d,err,load,act};
++}
++
++export function Bell({n}:{n:Notif}){
++  const{d,err,load,act}=n,[open,setOpen]=useState(false);
+   return <span className="bellw">
+-    <button className="ib" aria-label={'Notifications'+(d.unread?` (${d.unread} unread)`:'')} onClick={()=>{setOpen(o=>!o);if(!open)load()}}>{ICONS.bell}{d.unread>0&&<span className="bb">{d.unread>9?'9+':d.unread}</span>}</button>
++    <button className="ib" aria-label={'Notifications'+(d.unread?` (${d.unread} unread)`:'')} aria-expanded={open} onClick={()=>{setOpen(o=>!o);if(!open)load()}}>
++      <Icon name="heart"/>{d.unread>0&&<span className="bb">{d.unread>9?'9+':d.unread}</span>}</button>
+     {open&&<><div className="nscrim" onClick={()=>setOpen(false)}/><div className="nlist" role="dialog" aria-label="Notifications">
+-      <div className="row" style={{margin:'0 0 4px',justifyContent:'space-between'}}><b>Notifications</b>{d.unread>0&&<button className="btn g s" onClick={()=>act('/notifications/read-all',{method:'PATCH'})}>Mark all read</button>}</div>
++      <div className="nhead"><b>Notifications</b>{d.unread>0&&<button className="btn g s" onClick={()=>act('/notifications/read-all',{method:'PATCH'})}>Mark all read</button>}</div>
+       {err&&<div className="st dn">⚠ {err}</div>}
+       {!err&&!d.items.length&&<div className="st">Nothing new. Alerts appear when reach or engagement moves, a post sets a new best, or a competitor pulls ahead.</div>}
+-      {d.items.map(n=><div key={n.id} className={'nit'+(n.read_at?'':' un')} onClick={()=>!n.read_at&&act('/notifications/'+n.id,{method:'PATCH',body:{read:true}})}>
+-        <button className="nx" aria-label="Dismiss" onClick={e=>{e.stopPropagation();act('/notifications/'+n.id,{method:'DELETE'})}}>✕</button>
+-        <b>{n.title}</b><p>{n.body}</p>
+-        <span className="mu">{n.watch&&<>Watch: {n.watch}. </>}{ago(n.created_at)}</span></div>)}
++      {d.items.map(x=><div key={x.id} className={'nit'+(x.read_at?'':' un')} onClick={()=>!x.read_at&&act('/notifications/'+x.id,{method:'PATCH',body:{read:true}})}>
++        <span className="rg" style={{['--s' as any]:'44px'}}><i><Icon name={KIND_ICON[x.kind]||'analytics'} size={22}/></i></span>
++        <div className="nbody">
++          <button className="nx" aria-label="Dismiss" onClick={e=>{e.stopPropagation();act('/notifications/'+x.id,{method:'DELETE'})}}><Icon name="close" size={16}/></button>
++          <b>{x.title}</b><p>{x.body}</p>
++          <span className="mu">{x.watch&&<>Watch: {x.watch}. </>}{ago(x.created_at)}</span></div></div>)}
+     </div></>}
+   </span>}
++
++export function AlertBanner({n}:{n:Notif}){
++  const[gone,setGone]=useState(()=>{try{return sessionStorage.getItem(SEEN_KEY)}catch{return null}});
++  const a=n.d.items.find(x=>!x.read_at&&DROPS.includes(x.kind));
++  if(!a||String(a.id)===gone)return null;
++  // Dismissing only hides the banner for this browser session; the notification stays in the bell until it is read or deleted.
++  const hide=()=>{setGone(String(a.id));try{sessionStorage.setItem(SEEN_KEY,String(a.id))}catch{}};
++  return <div className="alertb" role="alert"><Icon name="alert" size={22}/><span className="alt">Alert: {a.title}</span>
++    <button className="alx" aria-label="Dismiss alert" onClick={hide}><Icon name="close" size={20}/></button></div>}
+diff --git a/web/src/icons.tsx b/web/src/icons.tsx
+index 5c6ef20..01de74a 100644
+--- a/web/src/icons.tsx
++++ b/web/src/icons.tsx
+@@ -1,29 +1,61 @@
+-const P=(d:string)=><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d}/></svg>;
+-export const ICONS:Record<string,JSX.Element>={
+- menu:P('M3 6h18M3 12h18M3 18h18'),
+- mic:P('M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8'),
+- bell:P('M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0'),
+- Dashboard:P('M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z'),
+- Statistics:P('M4 20V10M10 20V4M16 20v-8M22 20H2'),
+- start:P('M12 5v14M5 12h14'),
+- collab:P('M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8'),
+- mention:P('M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.9 7.9'),
+- community:P('M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'),
+- giveaway:P('M20 12v10H4V12M2 7h20v5H2zM12 22V7M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z'),
+- swap:P('M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3'),
+- content:P('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21'),
+- consistency:P('M3 4h18v18H3zM16 2v4M8 2v4M3 10h18'),
+- hashtags:P('M4 9h16M4 15h16M10 3L8 21M16 3l-2 18'),
+- Competitors:P('M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8'),
+- 'Content AI':P('M12 5v14M5 12h14'),
+- Scheduling:P('M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2'),
+- 'Finance & Capital':P('M3 7h18v12H3zM3 7l3-4h12l3 4M16 13h2'),
+- Settings:P('M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM4 12h2M18 12h2M12 4v2M12 18v2'),
+- Roadmap:P('M9 20l-6-3V4l6 3 6-3 6 3v13l-6-3zM9 7v13M15 4v13'),
+- sun:P('M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4'),
+- moon:P('M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z'),
+- clip:P('M21 11l-9 9a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.3-8.3'),
+- logout:P('M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9'),
+- chevDown:P('M6 9l6 6 6-6'),
+- chevUp:P('M18 15l-6-6-6 6'),
+-};
+\ No newline at end of file
++// One stroke-icon set. <Icon name="home"/> is 24px with a 1.8 stroke (Design D). Every path lives in PATHS, drawn on a 24x24 grid.
++// ICONS (below) keeps the old `ICONS.xyz` call sites working; it is generated from the same PATHS, so the whole app shares one look.
++const PATHS = {
++  // Design D navigation + shell
++  home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z',
++  marketing: 'M3 10v4a1 1 0 0 0 1 1h3l9 4V5L7 9H4a1 1 0 0 0-1 1zM19.5 9a4 4 0 0 1 0 6',
++  crm: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
++  ads: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z',
++  collabs: 'M9 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM15 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10z',
++  analytics: 'M6 20v-8M12 20V5M18 20v-11',
++  posts: 'M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18',
++  settings: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1',
++  user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
++  logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
++  heart: 'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21.2l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z',
++  alert: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 7v6M12 16.5v.5',
++  close: 'M6 6l12 12M18 6L6 18',
++  chat: 'M12 3a9 9 0 1 0 4.3 16.9L21 21l-1.2-4.6A9 9 0 0 0 12 3z',
++  plusSquare: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM12 8v8M8 12h8',
++  send: 'M22 2L11 13M22 2l-7 20-4-9-9-4z',
++  trendUp: 'M7 17L17 7M8 7h9v9',
++  trendDown: 'M7 7l10 10M17 8v9H8',
++  // Existing icons (names unchanged: Assistant, DashboardCards and the sidebar's "More" group look these up)
++  menu: 'M3 6h18M3 12h18M3 18h18',
++  mic: 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8',
++  bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0',
++  Dashboard: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z',
++  Statistics: 'M4 20V10M10 20V4M16 20v-8M22 20H2',
++  start: 'M12 5v14M5 12h14',
++  collab: 'M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8',
++  mention: 'M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.9 7.9',
++  community: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
++  giveaway: 'M20 12v10H4V12M2 7h20v5H2zM12 22V7M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z',
++  swap: 'M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3',
++  content: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21',
++  consistency: 'M3 4h18v18H3zM16 2v4M8 2v4M3 10h18',
++  hashtags: 'M4 9h16M4 15h16M10 3L8 21M16 3l-2 18',
++  Competitors: 'M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',
++  'Content AI': 'M12 5v14M5 12h14',
++  Scheduling: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2',
++  'Finance & Capital': 'M3 7h18v12H3zM3 7l3-4h12l3 4M16 13h2',
++  Settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM4 12h2M18 12h2M12 4v2M12 18v2',
++  Roadmap: 'M9 20l-6-3V4l6 3 6-3 6 3v13l-6-3zM9 7v13M15 4v13',
++  sun: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
++  moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z',
++  clip: 'M21 11l-9 9a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.3-8.3',
++  chevDown: 'M6 9l6 6 6-6',
++  chevUp: 'M18 15l-6-6-6 6',
++} as const;
++
++export type IconName = keyof typeof PATHS;
++
++// size defaults to 24 and sw (stroke width) to 1.8. Decorative by default; pass `title` when the icon is the only label.
++export function Icon({name, size = 24, sw = 1.8, title}: {name: IconName; size?: number; sw?: number; title?: string}) {
++  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round"
++    role={title ? 'img' : undefined} aria-label={title} aria-hidden={title ? undefined : true} focusable="false">
++    <path d={PATHS[name]}/></svg>;
++}
++
++export const ICONS: Record<string, JSX.Element> = Object.fromEntries(
++  (Object.keys(PATHS) as IconName[]).map(k => [k, <Icon key={k} name={k}/>]));
+diff --git a/web/src/pages/NotBuilt.tsx b/web/src/pages/NotBuilt.tsx
+new file mode 100644
+index 0000000..85e0f44
+--- /dev/null
++++ b/web/src/pages/NotBuilt.tsx
+@@ -0,0 +1,10 @@
++import {Card} from '../ui';
++
++// Sidebar entries that have no page yet (Marketing, CRM, Ads, Collabs). An honest empty state instead of a dead link or invented numbers.
++export default function NotBuilt({name,go,see}:{name:string;go:(page:string)=>void;see?:{label:string;page:string;why:string}}){
++  return <Card full t={name+' is not built yet'}>
++    <p style={{margin:'0 0 10px'}}>There is nothing in {name} for this version of RaidTechs. The Roadmap page lists what is planned and what each item needs.</p>
++    <div className="row" style={{justifyContent:'flex-start'}}>
++      <button className="btn" onClick={()=>go('Roadmap')}>See the roadmap</button>
++      {see&&<button className="btn g" onClick={()=>go(see.page)}>{see.label}</button>}
++      {see&&<span className="mu">{see.why}</span>}</div></Card>}
+diff --git a/web/src/styles.css b/web/src/styles.css
+index 62c5eb1..01a0403 100644
+--- a/web/src/styles.css
++++ b/web/src/styles.css
+@@ -1,47 +1,62 @@
+-/* RaidTechs — Instagram look, but with a rail that stays clickable, a main area that shifts with the drawer, and a movable assistant. */
+-:root{--bg:#fff;--card:#fff;--soft:#fafafa;--bd:#dbdbdb;--tx:#262626;--mu:#737373;--ac:#0095f6;--up:#00a35c;--dn:#ed4956;
++/* RaidTechs — Instagram-inspired (Design D): 3-column shell, token-driven light/dark theme, and a movable assistant. */
++/* ---- Design tokens (Design D). Light is the default; dark applies through data-theme="dark" (set by App.tsx).
++   bg page · pn panel/card · bd 1px borders · tx text · mu muted text · hv hover fill · bub assistant bubble
++   bl primary blue · rd negative/red · gn positive/green · alb alert-banner background ---- */
++:root,:root[data-theme=light]{
++  --bg:#fff;--pn:#fff;--bd:#dbdbdb;--tx:#262626;--mu:#737373;--hv:#f2f2f2;--bub:#efefef;
++  --bl:#0064e0;--rd:#c62a3a;--gn:#1f8a4c;--alb:#fff0f1}
++:root[data-theme=dark]{
++  --bg:#000;--pn:#121212;--bd:#363636;--tx:#f5f5f5;--mu:#a8a8a8;--hv:#1c1c1c;--bub:#262626;
++  --bl:#0064e0;--rd:#ff7a85;--gn:#4ade80;--alb:#2a0f12}
++/* Legacy names used by the existing pages. They now follow the tokens above, so every page picks up the new palette without edits. */
++:root{--card:var(--pn);--soft:var(--hv);--ac:var(--bl);--up:var(--gn);--dn:var(--rd);
+   --grad:linear-gradient(45deg,#f09433,#e6683c 25%,#dc2743 50%,#cc2366 75%,#bc1888);
+   --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+-  --rail:72px;--drawer:260px}
+-  :root[data-theme=dark]{--bg:#000;--card:#000;--soft:#121212;--bd:#262626;--tx:#f5f5f5;--mu:#a8a8a8}
+-  :root[data-theme=light]{--bg:#fff;--card:#fff;--soft:#fafafa;--bd:#dbdbdb;--tx:#262626;--mu:#737373}
++  --dv:color-mix(in srgb,var(--bd) 55%,transparent); /* shell dividers: a softer --bd */
++  --side:244px;--rc:320px}
+   *{box-sizing:border-box}
+   body{margin:0;background:var(--bg);color:var(--tx);font:14px/18px var(--font)}
+   button{font:inherit}
+-  .shell{display:flex;min-height:100vh}
+-  
+-  /* ---- Rail (fixed, above the scrim so its buttons stay clickable) ---- */
+-  .rail{width:var(--rail);border-right:1px solid var(--bd);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:8px;
+-    position:fixed;top:0;left:0;height:100vh;flex:none;background:var(--bg);z-index:40}
+-  .logo{width:36px;height:36px;border-radius:50%;background:var(--grad);display:grid;place-items:center;color:#fff;font-weight:700;margin-bottom:16px}
+-  .ib{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;background:none;border:0;color:var(--tx);cursor:pointer;position:relative;z-index:41}
+-  .ib:hover{background:var(--soft)}
+-  
+-  /* ---- Drawer (overlay next to the rail, not above it) ---- */
+-  .drawer{position:fixed;top:0;left:var(--rail);bottom:0;width:var(--drawer);background:var(--bg);border-right:1px solid var(--bd);
+-    padding:24px 12px;transform:translateX(-100%);transition:transform .25s ease;z-index:35;will-change:transform}
+-  .shell.drawer-open .drawer{transform:translateX(0)}
+-  .drawer h2{margin:0 12px 16px;font-size:20px;font-weight:600}
+-  .drawer button{display:flex;gap:16px;align-items:center;width:100%;padding:12px;border:0;border-radius:8px;background:none;color:var(--tx);font:16px var(--font);cursor:pointer;text-align:left}
+-  .drawer button:hover{background:var(--soft)}
+-  .drawer button.on{font-weight:700}
+-  
+-  /* ---- Scrim: dims only the content area (never the rail or the drawer) ---- */
+-  .scrim{position:fixed;top:0;left:calc(var(--rail) + var(--drawer));right:0;bottom:0;background:rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:opacity .25s ease;z-index:30}
+-  .scrim.on{opacity:1;pointer-events:auto}
+-  
+-  /* ---- Main: shifts with the drawer, content stays centered ---- */
+-  main{
+-    flex:1;min-width:0;
+-    padding:30px 20px 170px;
+-    margin-left:var(--rail);
+-    transition:margin-left .25s ease;
+-  }
+-  .shell.drawer-open main{margin-left:calc(var(--rail) + var(--drawer))}
+-  main > *{max-width:935px;margin-left:auto;margin-right:auto}
+-  
+-  .top{display:flex;align-items:baseline;gap:12px;margin:0 auto 20px;padding-bottom:12px;border-bottom:1px solid var(--bd);max-width:935px}
+-  .wm{font:italic 600 26px/1 'Segoe Script','Brush Script MT',cursive;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
++/* ---- Shell: sidebar | centre | right column. 244px / flexible / 320px. The right column is only drawn on pages that use it (App.tsx: has-rc). ---- */
++.shell{display:grid;grid-template-columns:var(--side) minmax(0,1fr);min-height:100vh}
++.shell.has-rc{grid-template-columns:var(--side) minmax(0,1fr) var(--rc)}
++
++/* ---- Sidebar: wordmark, nav, then Settings / Profile / Logout pinned to the bottom ---- */
++.side{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;padding:28px 12px 14px;border-right:1px solid var(--dv);background:var(--bg)}
++.wm{display:block;margin:0 0 28px;padding:0 12px;border:0;background:linear-gradient(90deg,#c0299f,#7444ca);-webkit-background-clip:text;background-clip:text;color:transparent;
++  font:700 24px/1.2 var(--font);letter-spacing:-.02em;text-align:left;cursor:pointer;width:max-content}
++.nav{display:flex;flex-direction:column;gap:4px;flex:1;min-height:0;overflow-y:auto}
++.navb{display:flex;align-items:center;gap:16px;width:100%;min-height:48px;padding:0 12px;border:0;border-radius:12px;background:none;color:var(--tx);font:400 16px var(--font);text-align:left;cursor:pointer}
++.navb:hover{background:var(--hv)}
++.navb[aria-current=page]{font-weight:700}
++.navb svg{flex:none}
++.navb.prof{gap:12px}
++.navb.out{color:var(--rd)}
++.navb.sm{min-height:36px;gap:16px;font-size:15px;color:var(--tx)}
++.navg{margin:12px 12px 2px;font:600 12px var(--font);color:var(--mu);text-transform:uppercase;letter-spacing:.04em}
++.sidefoot{flex:none;display:flex;flex-direction:column;gap:4px;padding-top:8px}
++.sidefoot .navb{min-height:46px}
++/* Ring avatar: gradient ring around a flat disc (profile, notification items, assistant avatar) */
++.rg{--s:38px;width:var(--s);height:var(--s);flex:none;border-radius:50%;padding:2px;display:grid;place-items:center;background:linear-gradient(45deg,#f09433,#dc2743 45%,#bc1888 70%,#7444ca)}
++.rg>i{width:100%;height:100%;border-radius:50%;background:var(--bg);display:grid;place-items:center;font:700 16px var(--font);font-style:normal;color:var(--tx)}
++
++/* ---- Centre column: top bar (.tb) (bell on the left, alert banner on the right) above the page ---- */
++.ctr{min-width:0;display:flex;flex-direction:column;min-height:100vh}
++.tb{position:relative;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 32px 0;min-height:72px}
++.barl,.barr{display:flex;align-items:center;gap:12px;min-width:0}
++.barr{flex:1;justify-content:flex-end}
++.ib{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:none;border:0;color:var(--tx);cursor:pointer;position:relative}
++.ib:hover{background:var(--hv)}
++.alertb{display:flex;align-items:center;gap:12px;min-height:52px;min-width:0;padding:0 14px 0 16px;border-radius:12px;background:var(--alb);color:var(--rd);font:500 15px var(--font)}
++.alertb svg{flex:none}
++.alertb .alt{min-width:0;overflow-wrap:anywhere}
++.alx{display:grid;place-items:center;flex:none;padding:4px;border:0;border-radius:8px;background:none;color:inherit;cursor:pointer}
++.alx:hover{background:rgba(128,128,128,.15)}
++.page{flex:1;width:100%;padding:12px 32px 170px}
++.cc-main .page{padding-bottom:0;display:flex;flex-direction:column}
++
++/* ---- Right column ---- */
++.rcol{position:sticky;top:0;height:100vh;overflow-y:auto;padding:24px;border-left:1px solid var(--dv)}
+   .mu{color:var(--mu);font-size:12px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0;justify-content:space-between}
+   
+   /* ---- Buttons, cards, grids ---- */
+@@ -85,8 +100,7 @@
+   .pi svg{width:16px;height:16px}
+   
+   /* ---- Assistant ---- */
+-  .composer{position:fixed;bottom:24px;left:calc(var(--rail) + 50%);transform:translateX(-50%);width:min(560px,calc(100vw - 120px));z-index:20;transition:transform .22s ease,opacity .22s ease}
+-  .shell.drawer-open .composer{transform:translateX(calc(-50% + var(--drawer)/2))}
++  .composer{position:fixed;bottom:24px;left:calc(var(--side)/2 + 50%);transform:translateX(-50%);width:min(560px,calc(100vw - var(--side) - 48px));z-index:20;transition:transform .22s ease,opacity .22s ease}
+   .composer.hidden{transform:translateY(calc(100% + 32px));opacity:0;pointer-events:none}
+   .composer form{display:flex;align-items:center;background:var(--soft);border:1px solid var(--bd);border-radius:22px;padding:0 6px 0 16px;height:44px;box-shadow:0 4px 20px rgba(0,0,0,.06)}
+   .composer input{flex:1;border:0;background:none;outline:none;padding:0}
+@@ -131,19 +145,19 @@
+   
+   /* 2.2 expandable analysis row, 2.3 notification bell */
+   .xp td{background:var(--soft);padding:12px 16px;white-space:normal}
+-  .bellw{position:relative}.bellw .ib{width:36px;height:36px}
+-  .bb{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;border-radius:8px;background:var(--dn);color:#fff;font-size:10px;font-weight:600;display:grid;place-items:center;padding:0 4px;pointer-events:none}
++  .bellw{position:relative;display:inline-flex}
++  .bb{position:absolute;top:0;right:0;min-width:18px;height:18px;border-radius:9px;background:#ff3040;color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 5px;pointer-events:none}
+   .nscrim{position:fixed;inset:0;z-index:29}
+-  .nlist{position:absolute;right:0;top:42px;width:340px;max-width:90vw;max-height:420px;overflow:auto;background:var(--bg);border:1px solid var(--bd);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);z-index:60;padding:8px}
+-  .nit{padding:10px;border-radius:8px;border-bottom:1px solid var(--bd);cursor:pointer}.nit:last-child{border-bottom:0}.nit:hover{background:var(--soft)}
++  .nlist{position:absolute;left:0;top:48px;width:360px;max-width:calc(100vw - 32px);max-height:420px;overflow:auto;background:var(--pn);border:1px solid var(--bd);border-radius:16px;box-shadow:0 8px 28px rgba(0,0,0,.18);z-index:60;padding:12px}
++  .nhead{display:flex;align-items:center;justify-content:space-between;padding:4px 8px 10px;font-size:18px}
++  .nit{display:flex;gap:12px;align-items:flex-start;padding:10px 8px;border-radius:12px;cursor:pointer}.nit:hover{background:var(--hv)}
++  .nbody{flex:1;min-width:0}
+   .nit.un b::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ac);margin-right:6px}
+-  .nit p{margin:4px 0;font-size:13px}.nx{float:right;background:none;border:0;color:var(--mu);cursor:pointer;font-size:14px}
++  .nit p{margin:2px 0 4px;font-size:13px}.nx{float:right;display:grid;place-items:center;background:none;border:0;color:var(--mu);cursor:pointer;padding:2px;border-radius:6px}.nx:hover{background:var(--hv);color:var(--tx)}
+   
+   /* Mobile */
+   @media(max-width:700px){
+-    :root{--rail:56px;--drawer:220px}
+     .composer{left:50%;width:calc(100vw - 96px)}
+-    .shell.drawer-open .composer{transform:translateX(-50%)}
+     main{padding:24px 14px 200px}
+     .result{width:min(360px,calc(100vw - 40px))}
+   }
+@@ -179,7 +193,7 @@
+ .result.edge-top{box-shadow:0 -6px 0 0 var(--ac),0 8px 32px rgba(0,0,0,.18)}
+ .result.edge-bottom{box-shadow:0 6px 0 0 var(--ac),0 8px 32px rgba(0,0,0,.18)}
+ 
+-/* Docked tab — sits to the side of the rail, not under it */
++/* Docked tab — sits to the right of the sidebar, not under it */
+ .docked-tab{
+   position:fixed;z-index:24;
+   display:inline-flex;align-items:center;gap:8px;
+@@ -194,9 +208,9 @@
+ .docked-bottom:hover{transform:translateX(-50%) scale(1.02)}
+ .dock-dot{width:8px;height:8px;border-radius:50%;background:var(--ac);flex:none}
+ 
+-/* Left: pinned to the right edge of the rail */
++/* Left: pinned to the right edge of the sidebar */
+ .docked-left{
+-  left:var(--rail);
++  left:var(--side);
+   top:50%;transform:translateY(-50%);
+   border-left:0;border-radius:0 12px 12px 0;
+   padding:14px 8px;
+@@ -226,9 +240,6 @@
+   padding:8px 14px;
+ }
+ 
+-.shell.drawer-open .docked-left{left:calc(var(--rail) + var(--drawer))}
+-.shell.drawer-open .docked-top,
+-.shell.drawer-open .docked-bottom{left:calc(var(--rail) + var(--drawer) + (100vw - var(--rail) - var(--drawer))/2)}
+ 
+ @media(max-width:700px){
+   .docked-left,.docked-right{padding:10px 6px}

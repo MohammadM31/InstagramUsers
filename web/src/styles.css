@@ -1,47 +1,62 @@
-/* RaidTechs — Instagram look, but with a rail that stays clickable, a main area that shifts with the drawer, and a movable assistant. */
-:root{--bg:#fff;--card:#fff;--soft:#fafafa;--bd:#dbdbdb;--tx:#262626;--mu:#737373;--ac:#0095f6;--up:#00a35c;--dn:#ed4956;
+/* RaidTechs — Instagram-inspired (Design D): 3-column shell, token-driven light/dark theme, and a movable assistant. */
+/* ---- Design tokens (Design D). Light is the default; dark applies through data-theme="dark" (set by App.tsx).
+   bg page · pn panel/card · bd 1px borders · tx text · mu muted text · hv hover fill · bub assistant bubble
+   bl primary blue · rd negative/red · gn positive/green · alb alert-banner background ---- */
+:root,:root[data-theme=light]{
+  --bg:#fff;--pn:#fff;--bd:#dbdbdb;--tx:#262626;--mu:#737373;--hv:#f2f2f2;--bub:#efefef;
+  --bl:#0064e0;--rd:#c62a3a;--gn:#1f8a4c;--alb:#fff0f1}
+:root[data-theme=dark]{
+  --bg:#000;--pn:#121212;--bd:#363636;--tx:#f5f5f5;--mu:#a8a8a8;--hv:#1c1c1c;--bub:#262626;
+  --bl:#0064e0;--rd:#ff7a85;--gn:#4ade80;--alb:#2a0f12}
+/* Legacy names used by the existing pages. They now follow the tokens above, so every page picks up the new palette without edits. */
+:root{--card:var(--pn);--soft:var(--hv);--ac:var(--bl);--up:var(--gn);--dn:var(--rd);
   --grad:linear-gradient(45deg,#f09433,#e6683c 25%,#dc2743 50%,#cc2366 75%,#bc1888);
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  --rail:72px;--drawer:260px}
-  :root[data-theme=dark]{--bg:#000;--card:#000;--soft:#121212;--bd:#262626;--tx:#f5f5f5;--mu:#a8a8a8}
-  :root[data-theme=light]{--bg:#fff;--card:#fff;--soft:#fafafa;--bd:#dbdbdb;--tx:#262626;--mu:#737373}
+  --dv:color-mix(in srgb,var(--bd) 55%,transparent); /* shell dividers: a softer --bd */
+  --side:244px;--rc:320px}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--tx);font:14px/18px var(--font)}
   button{font:inherit}
-  .shell{display:flex;min-height:100vh}
-  
-  /* ---- Rail (fixed, above the scrim so its buttons stay clickable) ---- */
-  .rail{width:var(--rail);border-right:1px solid var(--bd);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:8px;
-    position:fixed;top:0;left:0;height:100vh;flex:none;background:var(--bg);z-index:40}
-  .logo{width:36px;height:36px;border-radius:50%;background:var(--grad);display:grid;place-items:center;color:#fff;font-weight:700;margin-bottom:16px}
-  .ib{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;background:none;border:0;color:var(--tx);cursor:pointer;position:relative;z-index:41}
-  .ib:hover{background:var(--soft)}
-  
-  /* ---- Drawer (overlay next to the rail, not above it) ---- */
-  .drawer{position:fixed;top:0;left:var(--rail);bottom:0;width:var(--drawer);background:var(--bg);border-right:1px solid var(--bd);
-    padding:24px 12px;transform:translateX(-100%);transition:transform .25s ease;z-index:35;will-change:transform}
-  .shell.drawer-open .drawer{transform:translateX(0)}
-  .drawer h2{margin:0 12px 16px;font-size:20px;font-weight:600}
-  .drawer button{display:flex;gap:16px;align-items:center;width:100%;padding:12px;border:0;border-radius:8px;background:none;color:var(--tx);font:16px var(--font);cursor:pointer;text-align:left}
-  .drawer button:hover{background:var(--soft)}
-  .drawer button.on{font-weight:700}
-  
-  /* ---- Scrim: dims only the content area (never the rail or the drawer) ---- */
-  .scrim{position:fixed;top:0;left:calc(var(--rail) + var(--drawer));right:0;bottom:0;background:rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:opacity .25s ease;z-index:30}
-  .scrim.on{opacity:1;pointer-events:auto}
-  
-  /* ---- Main: shifts with the drawer, content stays centered ---- */
-  main{
-    flex:1;min-width:0;
-    padding:30px 20px 170px;
-    margin-left:var(--rail);
-    transition:margin-left .25s ease;
-  }
-  .shell.drawer-open main{margin-left:calc(var(--rail) + var(--drawer))}
-  main > *{max-width:935px;margin-left:auto;margin-right:auto}
-  
-  .top{display:flex;align-items:baseline;gap:12px;margin:0 auto 20px;padding-bottom:12px;border-bottom:1px solid var(--bd);max-width:935px}
-  .wm{font:italic 600 26px/1 'Segoe Script','Brush Script MT',cursive;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+/* ---- Shell: sidebar | centre | right column. 244px / flexible / 320px. The right column is only drawn on pages that use it (App.tsx: has-rc). ---- */
+.shell{display:grid;grid-template-columns:var(--side) minmax(0,1fr);min-height:100vh}
+.shell.has-rc{grid-template-columns:var(--side) minmax(0,1fr) var(--rc)}
+
+/* ---- Sidebar: wordmark, nav, then Settings / Profile / Logout pinned to the bottom ---- */
+.side{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;padding:28px 12px 14px;border-right:1px solid var(--dv);background:var(--bg)}
+.wm{display:block;margin:0 0 28px;padding:0 12px;border:0;background:linear-gradient(90deg,#c0299f,#7444ca);-webkit-background-clip:text;background-clip:text;color:transparent;
+  font:700 24px/1.2 var(--font);letter-spacing:-.02em;text-align:left;cursor:pointer;width:max-content}
+.nav{display:flex;flex-direction:column;gap:4px;flex:1;min-height:0;overflow-y:auto}
+.navb{display:flex;align-items:center;gap:16px;width:100%;min-height:48px;padding:0 12px;border:0;border-radius:12px;background:none;color:var(--tx);font:400 16px var(--font);text-align:left;cursor:pointer}
+.navb:hover{background:var(--hv)}
+.navb[aria-current=page]{font-weight:700}
+.navb svg{flex:none}
+.navb.prof{gap:12px}
+.navb.out{color:var(--rd)}
+.navb.sm{min-height:36px;gap:16px;font-size:15px;color:var(--tx)}
+.navg{margin:12px 12px 2px;font:600 12px var(--font);color:var(--mu);text-transform:uppercase;letter-spacing:.04em}
+.sidefoot{flex:none;display:flex;flex-direction:column;gap:4px;padding-top:8px}
+.sidefoot .navb{min-height:46px}
+/* Ring avatar: gradient ring around a flat disc (profile, notification items, assistant avatar) */
+.rg{--s:38px;width:var(--s);height:var(--s);flex:none;border-radius:50%;padding:2px;display:grid;place-items:center;background:linear-gradient(45deg,#f09433,#dc2743 45%,#bc1888 70%,#7444ca)}
+.rg>i{width:100%;height:100%;border-radius:50%;background:var(--bg);display:grid;place-items:center;font:700 16px var(--font);font-style:normal;color:var(--tx)}
+
+/* ---- Centre column: top bar (.tb) (bell on the left, alert banner on the right) above the page ---- */
+.ctr{min-width:0;display:flex;flex-direction:column;min-height:100vh}
+.tb{position:relative;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 32px 0;min-height:72px}
+.barl,.barr{display:flex;align-items:center;gap:12px;min-width:0}
+.barr{flex:1;justify-content:flex-end}
+.ib{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:none;border:0;color:var(--tx);cursor:pointer;position:relative}
+.ib:hover{background:var(--hv)}
+.alertb{display:flex;align-items:center;gap:12px;min-height:52px;min-width:0;padding:0 14px 0 16px;border-radius:12px;background:var(--alb);color:var(--rd);font:500 15px var(--font)}
+.alertb svg{flex:none}
+.alertb .alt{min-width:0;overflow-wrap:anywhere}
+.alx{display:grid;place-items:center;flex:none;padding:4px;border:0;border-radius:8px;background:none;color:inherit;cursor:pointer}
+.alx:hover{background:rgba(128,128,128,.15)}
+.page{flex:1;width:100%;padding:12px 32px 170px}
+.cc-main .page{padding-bottom:0;display:flex;flex-direction:column}
+
+/* ---- Right column ---- */
+.rcol{position:sticky;top:0;height:100vh;overflow-y:auto;padding:24px;border-left:1px solid var(--dv)}
   .mu{color:var(--mu);font-size:12px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0;justify-content:space-between}
   
   /* ---- Buttons, cards, grids ---- */
@@ -85,8 +100,7 @@
   .pi svg{width:16px;height:16px}
   
   /* ---- Assistant ---- */
-  .composer{position:fixed;bottom:24px;left:calc(var(--rail) + 50%);transform:translateX(-50%);width:min(560px,calc(100vw - 120px));z-index:20;transition:transform .22s ease,opacity .22s ease}
-  .shell.drawer-open .composer{transform:translateX(calc(-50% + var(--drawer)/2))}
+  .composer{position:fixed;bottom:24px;left:calc(var(--side)/2 + 50%);transform:translateX(-50%);width:min(560px,calc(100vw - var(--side) - 48px));z-index:20;transition:transform .22s ease,opacity .22s ease}
   .composer.hidden{transform:translateY(calc(100% + 32px));opacity:0;pointer-events:none}
   .composer form{display:flex;align-items:center;background:var(--soft);border:1px solid var(--bd);border-radius:22px;padding:0 6px 0 16px;height:44px;box-shadow:0 4px 20px rgba(0,0,0,.06)}
   .composer input{flex:1;border:0;background:none;outline:none;padding:0}
@@ -131,19 +145,19 @@
   
   /* 2.2 expandable analysis row, 2.3 notification bell */
   .xp td{background:var(--soft);padding:12px 16px;white-space:normal}
-  .bellw{position:relative}.bellw .ib{width:36px;height:36px}
-  .bb{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;border-radius:8px;background:var(--dn);color:#fff;font-size:10px;font-weight:600;display:grid;place-items:center;padding:0 4px;pointer-events:none}
+  .bellw{position:relative;display:inline-flex}
+  .bb{position:absolute;top:0;right:0;min-width:18px;height:18px;border-radius:9px;background:#ff3040;color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 5px;pointer-events:none}
   .nscrim{position:fixed;inset:0;z-index:29}
-  .nlist{position:absolute;right:0;top:42px;width:340px;max-width:90vw;max-height:420px;overflow:auto;background:var(--bg);border:1px solid var(--bd);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);z-index:60;padding:8px}
-  .nit{padding:10px;border-radius:8px;border-bottom:1px solid var(--bd);cursor:pointer}.nit:last-child{border-bottom:0}.nit:hover{background:var(--soft)}
+  .nlist{position:absolute;left:0;top:48px;width:360px;max-width:calc(100vw - 32px);max-height:420px;overflow:auto;background:var(--pn);border:1px solid var(--bd);border-radius:16px;box-shadow:0 8px 28px rgba(0,0,0,.18);z-index:60;padding:12px}
+  .nhead{display:flex;align-items:center;justify-content:space-between;padding:4px 8px 10px;font-size:18px}
+  .nit{display:flex;gap:12px;align-items:flex-start;padding:10px 8px;border-radius:12px;cursor:pointer}.nit:hover{background:var(--hv)}
+  .nbody{flex:1;min-width:0}
   .nit.un b::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ac);margin-right:6px}
-  .nit p{margin:4px 0;font-size:13px}.nx{float:right;background:none;border:0;color:var(--mu);cursor:pointer;font-size:14px}
+  .nit p{margin:2px 0 4px;font-size:13px}.nx{float:right;display:grid;place-items:center;background:none;border:0;color:var(--mu);cursor:pointer;padding:2px;border-radius:6px}.nx:hover{background:var(--hv);color:var(--tx)}
   
   /* Mobile */
   @media(max-width:700px){
-    :root{--rail:56px;--drawer:220px}
     .composer{left:50%;width:calc(100vw - 96px)}
-    .shell.drawer-open .composer{transform:translateX(-50%)}
     main{padding:24px 14px 200px}
     .result{width:min(360px,calc(100vw - 40px))}
   }
@@ -179,7 +193,7 @@
 .result.edge-top{box-shadow:0 -6px 0 0 var(--ac),0 8px 32px rgba(0,0,0,.18)}
 .result.edge-bottom{box-shadow:0 6px 0 0 var(--ac),0 8px 32px rgba(0,0,0,.18)}
 
-/* Docked tab — sits to the side of the rail, not under it */
+/* Docked tab — sits to the right of the sidebar, not under it */
 .docked-tab{
   position:fixed;z-index:24;
   display:inline-flex;align-items:center;gap:8px;
@@ -194,9 +208,9 @@
 .docked-bottom:hover{transform:translateX(-50%) scale(1.02)}
 .dock-dot{width:8px;height:8px;border-radius:50%;background:var(--ac);flex:none}
 
-/* Left: pinned to the right edge of the rail */
+/* Left: pinned to the right edge of the sidebar */
 .docked-left{
-  left:var(--rail);
+  left:var(--side);
   top:50%;transform:translateY(-50%);
   border-left:0;border-radius:0 12px 12px 0;
   padding:14px 8px;
@@ -226,9 +240,6 @@
   padding:8px 14px;
 }
 
-.shell.drawer-open .docked-left{left:calc(var(--rail) + var(--drawer))}
-.shell.drawer-open .docked-top,
-.shell.drawer-open .docked-bottom{left:calc(var(--rail) + var(--drawer) + (100vw - var(--rail) - var(--drawer))/2)}
 
 @media(max-width:700px){
   .docked-left,.docked-right{padding:10px 6px}
