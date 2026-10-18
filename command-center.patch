@@ -1,0 +1,577 @@
+diff --git a/package.json b/package.json
+index f787902..87ee0fc 100644
+--- a/package.json
++++ b/package.json
+@@ -1,2 +1,2 @@
+-{"name":"growthengine-api","version":"0.1.0","type":"module","scripts":{"start":"node src/server.js","dev":"node --watch src/server.js","worker":"node src/worker.js","migrate":"node src/migrate.js","seed":"node src/seed.js","test":"node --test test/crypto.test.js test/advisor.test.js test/config.test.js test/importer.test.js test/phase1.test.js test/loadenv.test.js test/fix1.test.js test/phase2.test.js test/phaseA1.test.js test/phaseA1c.test.js test/phaseO1.test.js test/onboardingUi.test.js test/onboardingO2.test.js test/phaseO3.test.js test/voiceUi.test.js test/phaseO4.test.js test/profileUi.test.js test/phase42.test.js test/phaseD1.test.js test/phaseA2.test.js test/commentsUi.test.js test/phaseA3.test.js test/competitorsUi.test.js test/storage.test.js test/storedimages.test.js"},
++{"name":"growthengine-api","version":"0.1.0","type":"module","scripts":{"start":"node src/server.js","dev":"node --watch src/server.js","worker":"node src/worker.js","migrate":"node src/migrate.js","seed":"node src/seed.js","test":"node --test test/crypto.test.js test/advisor.test.js test/config.test.js test/importer.test.js test/phase1.test.js test/loadenv.test.js test/fix1.test.js test/phase2.test.js test/phaseA1.test.js test/phaseA1c.test.js test/phaseO1.test.js test/onboardingUi.test.js test/onboardingO2.test.js test/phaseO3.test.js test/voiceUi.test.js test/phaseO4.test.js test/profileUi.test.js test/phase42.test.js test/phaseD1.test.js test/phaseA2.test.js test/commentsUi.test.js test/phaseA3.test.js test/competitorsUi.test.js test/storage.test.js test/storedimages.test.js test/commandCenter.test.js"},
+ "dependencies":{"bcryptjs":"^2.4.3","bullmq":"^5.12.0","cors":"^2.8.5","express":"^4.19.2","express-rate-limit":"^7.4.0","helmet":"^7.1.0","ioredis":"^5.4.1","jsonwebtoken":"^9.0.2","pg":"^8.12.0","sharp":"^0.33.5"}}
+\ No newline at end of file
+diff --git a/test/commandCenter.test.js b/test/commandCenter.test.js
+new file mode 100644
+index 0000000..5e7cc24
+--- /dev/null
++++ b/test/commandCenter.test.js
+@@ -0,0 +1,62 @@
++// Command Center helpers (web/src/cc.ts). Pure logic only; the React wiring is checked by rendering (see docs) and in a browser.
++import test from 'node:test';
++import assert from 'node:assert/strict';
++let cc = null; try { cc = await import('../web/src/cc.ts'); } catch { /* old Node without type stripping */ }
++const T = cc ? test : test.skip;
++
++T('briefing: reach up/down/unchanged/unknown wording comes straight from the numbers', () => {
++  const mk = pct => cc.briefing({ name: 'Mo', dash: { reach: { value: 12345, changePct: pct }, avgER: { value: 4.2, changePct: 0.5 } }, ctx: { coverage: { posts: 9 }, health: { score: 72, label: 'Good' } } });
++  assert.equal(mk(12.34).headline, 'Welcome back, Mo.');
++  assert.equal(mk(12.34).lines[0], 'Reach is up 12.3% on the previous 30 days (12,345).');
++  assert.match(mk(-8).lines[0], /^Reach is down 8% on the previous 30 days/);
++  assert.match(mk(0).lines[0], /unchanged/);
++  assert.equal(mk(null).lines[0], 'Reach is 12,345 over the last 30 days.');
++  assert.equal(mk(12).lines[1], 'Engagement rate is up 0.5% on the previous 30 days (4.2%).');
++  assert.equal(mk(12).lines[2], 'Account health: 72 (Good).');
++});
++T('briefing: focus line, tone, no name, and honest empty states', () => {
++  const base = { dash: { reach: { value: 100, changePct: 5 } }, ctx: { coverage: { posts: 3 }, health: { score: 80, label: 'Good' } } };
++  const g = cc.briefing({ ...base, focus: 'Reach out to two creators' });
++  assert.equal(g.headline, 'Welcome back.'); assert.ok(g.lines.includes('Focus on: Reach out to two creators')); assert.equal(g.tone, 'good');
++  assert.equal(cc.briefing({ dash: { reach: { value: 100, changePct: -20 } }, ctx: base.ctx }).tone, 'warn');
++  assert.equal(cc.briefing({ dash: { reach: { value: 100, changePct: 5 } }, ctx: { coverage: { posts: 3 }, health: { score: 40, label: 'Weak' } } }).tone, 'warn', 'a low health score is a warning even with reach up');
++  const none = cc.briefing({ name: 'Mo', dash: { reach: { value: 0, changePct: null } }, ctx: { coverage: { posts: 0 }, gaps: ['No posts yet: import or connect'] } });
++  assert.match(none.lines[0], /no post data yet/); assert.match(none.lines[1], /^Focus on this first: No posts yet/); assert.equal(none.tone, 'info');
++  assert.deepEqual(cc.briefing({}).lines, ['The briefing could not load yet.']);
++  assert.ok(!cc.briefing({ dash: { reach: { value: 100, changePct: 1 } }, ctx: { coverage: { posts: 1 } } }).lines.some(l => /health/i.test(l)), 'no health line without health data');
++});
++T('fixQuestion: known kinds get a pointed question; unknown kinds quote the priority; long text is cut; never empty', () => {
++  assert.match(cc.fixQuestion({ kind: 'follower_drop', text: 'x' }), /followers have dropped/);
++  const u = cc.fixQuestion({ kind: 'brand_new_kind', text: '  Post   three\nreels this week ' });
++  assert.match(u, /"Post three reels this week"/); assert.match(u, /What exactly should I do this week/);
++  assert.ok(cc.fixQuestion({ kind: 'zzz', text: 'a'.repeat(500) }).length < 300);
++  assert.equal(cc.fixQuestion({ kind: 'zzz', text: '' }), 'What should I do next?');
++  assert.equal(cc.fixQuestion({ kind: 'toString', text: 'inherited key must not match' }).includes('inherited key'), true, 'object prototype keys are not treated as kinds');
++});
++T('pickAlerts: unread first, newest first, at most 3, input not mutated', () => {
++  const a = (id, read, at) => ({ id, kind: 'x', title: 't' + id, body: '', created_at: at, read_at: read ? at : null });
++  const items = [a(1, true, '2026-10-18T10:00:00Z'), a(2, false, '2026-10-18T08:00:00Z'), a(3, false, '2026-10-18T09:00:00Z'), a(4, true, '2026-10-18T11:00:00Z'), a(5, false, '2026-10-17T09:00:00Z')];
++  const copy = JSON.stringify(items);
++  assert.deepEqual(cc.pickAlerts(items).map(x => x.id), [3, 2, 5]);
++  assert.deepEqual(cc.pickAlerts(items, 5).map(x => x.id), [3, 2, 5, 4, 1]);
++  assert.equal(JSON.stringify(items), copy);
++  assert.deepEqual(cc.pickAlerts(null), []);
++});
++T('connectionView: green only when connected', () => {
++  assert.deepEqual([cc.connectionView({ status: 'connected', username: 'shop' }).on, cc.connectionView({ status: 'connected', username: 'shop' }).label], [true, '@shop']);
++  for (const s of ['reconnect_needed', 'disconnected', 'dev_env', 'whatever']) assert.equal(cc.connectionView({ status: s }).on, false, s);
++  assert.equal(cc.connectionView({ status: 'reconnect_needed', username: 'shop' }).label, '@shop');
++  assert.equal(cc.connectionView(null).on, false); assert.equal(cc.connectionView(undefined).on, false);
++  assert.match(cc.connectionView({ status: 'connected' }).label, /^@instagram$/);
++});
++T('scheduleBody: caption, valid future time, public URL only when it is http(s); never a data URI', () => {
++  const now = Date.parse('2026-10-18T10:00:00Z'), when = '2026-10-19T09:30';
++  const ok = cc.scheduleBody('  Fresh batch!  ', when, 'https://cdn.example/a.jpg', now);
++  assert.deepEqual(ok.body, { caption: 'Fresh batch!', image: 'https://cdn.example/a.jpg', scheduledAt: new Date(when).toISOString() });
++  assert.equal(cc.scheduleBody('x', when, undefined, now).body.image, null);
++  assert.equal(cc.scheduleBody('x', when, 'data:image/png;base64,AAAA', now).body.image, null);
++  assert.equal(cc.scheduleBody('x', when, 'javascript:alert(1)', now).body.image, null);
++  for (const [c, w, msg] of [['', when, /caption/], ['   ', when, /caption/], ['x', '', /Pick a date/], ['x', 'not a date', /not valid/], ['x', '2020-01-01T00:00', /future/], ['a'.repeat(2201), when, /2,200/]])
++    assert.match(cc.scheduleBody(c, w, null, now).error, msg);
++  assert.equal(cc.scheduleBody('x', new Date(now - 30000).toISOString().slice(0, 16), null, now).error, undefined, 'less than a minute in the past is tolerated (rounding of the input)');
++});
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+index 8e0f388..c039cc0 100644
+--- a/web/src/App.tsx
++++ b/web/src/App.tsx
+@@ -2,7 +2,7 @@ import {useState,useEffect} from 'react';
+ import type {ComponentType} from 'react';
+ import {tok,api} from './api';
+ import Login from './pages/Login';
+-import Dashboard from './pages/Dashboard';
++import CommandCenter from './pages/CommandCenter';
+ import Analytics from './pages/Analytics';
+ import Competitors from './pages/Competitors';
+ import Content from './pages/Content';
+@@ -19,7 +19,8 @@ import {parseIgRedirect} from './ig';
+ 
+ const IGR=parseIgRedirect(); // /?ig=connected|error&reason=... after the Instagram login (A.1d); read once at load
+ 
+-const PAGES:Record<string,ComponentType>={Dashboard,Statistics:Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,'Finance & Capital':Finance,Settings,Roadmap};
++// 'Dashboard' is now the Command Center (pages/Dashboard.tsx is no longer routed). CommandCenter takes props, hence ComponentType<any>.
++const PAGES:Record<string,ComponentType<any>>={Dashboard:CommandCenter,Statistics:Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,'Finance & Capital':Finance,Settings,Roadmap};
+ 
+ export default function App(){
+   const[t,setT]=useState(tok()),[p,setP]=useState(IGR?'Settings':'Dashboard'),[igMsg,setIgMsg]=useState(IGR),[open,setOpen]=useState(false),[ob,setOb]=useState<'loading'|'needed'|'ok'>('loading'),
+@@ -32,27 +33,28 @@ export default function App(){
+   if(!t)return <Login onAuth={()=>setT(tok())}/>;
+   if(ob==='loading')return <div className="st" style={{margin:24}}>Loading…</div>;
+   if(ob==='needed')return <Onboarding igMsg={igMsg} onDone={()=>setOb('ok')}/>;
+-  const P=PAGES[p];
++  const P=PAGES[p],cc=p==='Dashboard',logout=()=>{localStorage.removeItem('t');setT('')};
+   return <div className={'shell'+(open?' drawer-open':'')}>
+     <aside className="rail">
+       <div className="logo">R</div>
+       <button className="ib" aria-label="Menu" title="Menu" onClick={()=>setOpen(o=>!o)}>{ICONS.menu}</button>
+       <button className="ib" aria-label="Toggle theme" title="Toggle theme" style={{marginTop:'auto'}} onClick={()=>setDk(d=>!d)}>{dk?ICONS.sun:ICONS.moon}</button>
+-      <button className="ib" aria-label="Log out" title="Log out" onClick={()=>{localStorage.removeItem('t');setT('')}}>{ICONS.logout}</button>
++      <button className="ib" aria-label="Log out" title="Log out" onClick={logout}>{ICONS.logout}</button>
+     </aside>
+     <div className={'scrim'+(open?' on':'')} onClick={()=>setOpen(false)}/>
+     <nav className={'drawer'+(open?' open':'')} aria-hidden={!open}>
+       <h2>Explore</h2>
+       {Object.keys(PAGES).map(k=><button key={k} className={k===p?'on':''} onClick={()=>{setP(k);setOpen(false)}}>{ICONS[k]}{k}</button>)}
+     </nav>
+-    <main>
++    <main className={cc?'cc-main':undefined}>
+       <header className="top">
+         <span className="wm">RaidTechs</span>
+         <span className="mu">{p}</span>
+         <span style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}><IgBadge onClick={()=>setP('Settings')}/><Notifications/></span>
+       </header>
+       {igMsg&&<div className={'banner '+(igMsg.ok?'ok':'bad')} role="status"><span>{igMsg.text}</span><button className="btn g s" onClick={()=>setIgMsg(null)}>Close</button></div>}
+-      <P/>
++      {cc?<CommandCenter pages={Object.keys(PAGES)} page={p} go={setP} onLogout={logout}/>:<P/>}
+     </main>
+-    <Assistant/>
++    {/* The global bottom chat is hidden on the Command Center, which embeds its own. */}
++    {!cc&&<Assistant isEmbedded={false}/>}
+   </div>}
+\ No newline at end of file
+diff --git a/web/src/Assistant.tsx b/web/src/Assistant.tsx
+index 988b510..af53de0 100644
+--- a/web/src/Assistant.tsx
++++ b/web/src/Assistant.tsx
+@@ -3,6 +3,7 @@ import type {FormEvent} from 'react';
+ import {api} from './api';
+ import {ICONS} from './icons';
+ import {canEditResponse,checkEdit,applyEdit} from './resp';
++import {scheduleBody,IMAGE_NOT_ATTACHED} from './cc';
+ import {LANGS,NOTICE,NOTICE_KEY,defaultLang,getRecognition,describeSpeechError,splitResults,mergeTranscript} from './speech';
+ 
+ type R={type:string;text:string;data?:any;original?:string;edited?:boolean};
+@@ -25,9 +26,29 @@ function Editable({r,onSaved}:{r:R;onSaved:(t:string)=>void}){
+       {r.edited&&<span className="mu edited" title={r.original?'Original: '+r.original:undefined}>edited</span>}
+       <button className="btn g s" onClick={start}>Edit</button></div></div>}
+ 
++// "Schedule this post" under a generated image: caption + time, then POST /schedule (the same call the Content AI tab uses).
++// The image rides along only when the server returned a public URL (urls, present when image storage is set up); otherwise only the caption is queued and the note says so.
++function ScheduleThis({publicUrl}:{publicUrl?:string}){
++  const[open,setOpen]=useState(false),[cap,setCap]=useState(''),[when,setWhen]=useState(''),[bz,setBz]=useState(false),[msg,setMsg]=useState<{ok:boolean;text:string}|null>(null);
++  const submit=async()=>{
++    const b=scheduleBody(cap,when,publicUrl,Date.now());if('error' in b){setMsg({ok:false,text:b.error});return}
++    setBz(true);setMsg(null);
++    try{await api('/schedule',{method:'POST',body:b.body});setMsg({ok:true,text:'Scheduled. See the Scheduling tab.'+(b.body.image?'':' '+IMAGE_NOT_ATTACHED)});setOpen(false);setCap('');setWhen('')}
++    catch(e:any){setMsg({ok:false,text:e.message})}finally{setBz(false)}};
++  return <div className="schedthis">
++    {!open&&<button type="button" className="btn s" onClick={()=>{setOpen(true);setMsg(null)}}>Schedule this post</button>}
++    {open&&<div>
++      <textarea rows={3} aria-label="Caption" placeholder="Caption for this post" value={cap} onChange={e=>setCap(e.target.value)}/>
++      <div className="row" style={{justifyContent:'flex-start'}}>
++        <input type="datetime-local" aria-label="Publish at" value={when} onChange={e=>setWhen(e.target.value)}/>
++        <button type="button" className="btn s" disabled={bz} onClick={submit}>{bz?'Scheduling…':'Add to queue'}</button>
++        <button type="button" className="btn g s" disabled={bz} onClick={()=>setOpen(false)}>Cancel</button></div>
++      {!publicUrl&&<p className="mu" style={{margin:'2px 0'}}>{IMAGE_NOT_ATTACHED}</p>}</div>}
++    {msg&&<div className={msg.ok?'mu':'dn'} role={msg.ok?'status':'alert'}>{msg.ok?'✔ ':'⚠ '}{msg.text}</div>}</div>}
++
+ function Result({r,onSaved}:{r:R;onSaved:(t:string)=>void}){
+   const d=r.data||{};
+-  if(r.type==='image'&&d.url)return <><img src={d.url} alt="Generated"/><div className="row"><span className="mu">{r.text}</span><a className="btn s" href={d.url} download="post.png">Save</a></div></>;
++  if(r.type==='image'&&d.url)return <><img src={d.url} alt="Generated"/><div className="row"><span className="mu">{r.text}</span><a className="btn s" href={d.url} download="post.png">Save</a></div><ScheduleThis publicUrl={d.publicUrl}/></>;
+   if(r.type==='analytics')return <>
+     <div className="ring"><i>{d.health.score}</i></div><p style={{textAlign:'center'}}><b>{r.text}</b></p>
+     <div className="row"><span>Reach 30d <b>{d.metrics.reach30d.toLocaleString()}</b></span><span>Engagement <b>{d.metrics.er}%</b></span><span>Reach change <b>{d.metrics.reachChange}%</b></span></div>
+@@ -46,9 +67,14 @@ const CARD_W=380,CARD_H=220; // approx card size for clamping
+ 
+ type Dock='left'|'right'|'top'|'bottom'|null;
+ 
+-export default function Assistant(){
++export type Prefill={id:number;text:string};
++// isEmbedded=false: the global bar fixed at the bottom of the shell (every tab except the Command Center).
++// isEmbedded=true: the same chat laid out in normal flow inside a page (the Command Center). prefill: set {id,text} to fill the input from outside ("Fix this"); a new id refills even the same text.
++export default function Assistant({isEmbedded=false,prefill=null}:{isEmbedded?:boolean;prefill?:Prefill|null}){
+   const[m,setM]=useState(''),[r,setR]=useState<R|null>(null),[b,setB]=useState(false),[ref,setRef]=useState(''),
+-    f=useRef<HTMLInputElement>(null),seq=useRef(0);
++    f=useRef<HTMLInputElement>(null),txt=useRef<HTMLInputElement>(null),seq=useRef(0);
++  // Post generation mode: OFF = the normal assistant (/assistant). ON = the text goes to the image generator (/content/image) instead.
++  const[gen,setGen]=useState(false),[ratio,setRatio]=useState('1:1');
+ 
+   const[barHidden,setBarHidden]=useState(()=>localStorage.getItem(BAR_KEY)==='0');
+   const[pos,setPos]=useState<{x:number;y:number}|null>(()=>{try{const s=localStorage.getItem(POS_KEY);return s?JSON.parse(s):null}catch{return null}});
+@@ -65,8 +91,14 @@ export default function Assistant(){
+   useEffect(()=>{try{pos?localStorage.setItem(POS_KEY,JSON.stringify(pos)):localStorage.removeItem(POS_KEY)}catch{}},[pos]);
+   useEffect(()=>{try{docked?localStorage.setItem(DOCKED_KEY,docked):localStorage.removeItem(DOCKED_KEY)}catch{}},[docked]);
+ 
++  useEffect(()=>()=>{seq.current++},[]); // leaving the page ends any image polling loop
++  useEffect(()=>{if(prefill&&prefill.text){setGen(false);setM(prefill.text);setTimeout(()=>txt.current?.focus(),0)}},[prefill?.id]); // eslint-disable-line react-hooks/exhaustive-deps
++
++  // The embedded chat never reads or writes the saved dock/position/hidden state of the global bar.
++  const ps=isEmbedded?null:pos,dk:Dock=isEmbedded?null:docked;
++
+   // X button — this is the ONLY thing that clears r
+-  const hideResponse=()=>{setR(null);setPos(null);setDocked(null)};
++  const hideResponse=()=>{setR(null);if(!isEmbedded){setPos(null);setDocked(null)}};
+ 
+   // Hiding the bar does NOT clear r: the response is preserved and re-shown on unhide.
+   const toggleBar=()=>setBarHidden(h=>!h);
+@@ -103,11 +135,17 @@ export default function Assistant(){
+     setB(true);
+     const id=++seq.current;
+     // A new request resets any dock/position so the fresh card appears attached
+-    setPos(null);setDocked(null);
++    if(!isEmbedded){setPos(null);setDocked(null)}
+     try{
+-      const x=await api<R>('/assistant',{method:'POST',body:{message:m,referenceImage:ref||undefined}});
+-      setR(x);
+-      if(x.type==='image'&&x.data?.jobId)await poll(x.data.jobId,id);
++      if(gen){ // Post generation ON: skip the assistant, go straight to the image generator (same call as the Content AI tab)
++        const j=await api<{jobId:string}>('/content/image',{method:'POST',body:{prompt:m.trim(),ratio,referenceImage:ref||undefined}});
++        setR({type:'image',text:'Generating your image… 0s',data:{jobId:j.jobId}});
++        await poll(j.jobId,id);
++      }else{
++        const x=await api<R>('/assistant',{method:'POST',body:{message:m,referenceImage:ref||undefined}});
++        setR(x);
++        if(x.type==='image'&&x.data?.jobId)await poll(x.data.jobId,id);
++      }
+     }catch(x:any){setR({type:'info',text:x.message})}
+     setB(false);setM('');setRef('');
+   };
+@@ -117,7 +155,7 @@ export default function Assistant(){
+       await new Promise(r=>setTimeout(r,2000));
+       if(id!==seq.current)return;
+       const s=await api<any>('/content/image/'+jobId);
+-      if(s.status==='done'){setR({type:'image',text:'Here you go.',data:{url:s.images[0]}});return}
++      if(s.status==='done'){setR({type:'image',text:'Here you go.',data:{url:s.images[0],publicUrl:s.urls?.[0]}});return}
+       if(s.status==='failed'){setR({type:'info',text:'Image generation failed: '+(s.error||'try again')});return}
+       setR({type:'image',text:'Generating your image… '+i*2+'s',data:{jobId}});
+     }
+@@ -183,7 +221,7 @@ export default function Assistant(){
+   //  - if the bar is hidden AND the card is attached → hide
+   //  - if docked → show as a tab (see below)
+   //  - otherwise show
+-  const responseVisible = !!r && !(barHidden && pos===null && docked===null);
++  const responseVisible = !!r && (isEmbedded || !(barHidden && pos===null && docked===null));
+ 
+   const go=(t:string)=>setM(t);
+ 
+@@ -196,20 +234,20 @@ export default function Assistant(){
+     </button>;
+   };
+ 
+-  return <>
+-    {/* Response card — shown when it exists and is not (attached + bar hidden) */}
+-    {responseVisible && !docked && (
++  const body=<>
++    {/* Response card — shown when it exists and is not (attached + bar hidden). Embedded: an ordinary card above the input, no dragging or docking. */}
++    {responseVisible && !dk && (
+       <div
+         ref={cardRef}
+-        className={'card result'+(pos?' detached':' attached')+(dragging?' dragging':'')+(edgeHint?' edge-'+edgeHint:'')}
+-        style={pos?{left:pos.x,top:pos.y,position:'fixed',transform:'none',bottom:'auto',right:'auto'}:attachedStyle}
+-        onPointerDown={onDown}
+-        onPointerMove={onMove}
+-        onPointerUp={onUp}
+-        onPointerCancel={onUp}
++        className={'card result'+(isEmbedded?' inline':ps?' detached':' attached')+(dragging?' dragging':'')+(edgeHint?' edge-'+edgeHint:'')}
++        style={isEmbedded?undefined:ps?{left:ps.x,top:ps.y,position:'fixed',transform:'none',bottom:'auto',right:'auto'}:attachedStyle}
++        onPointerDown={isEmbedded?undefined:onDown}
++        onPointerMove={isEmbedded?undefined:onMove}
++        onPointerUp={isEmbedded?undefined:onUp}
++        onPointerCancel={isEmbedded?undefined:onUp}
+       >
+         <div className="result-head">
+-          <span className="drag-handle" title={pos?'Drag to move':'Drag to detach and move'}>⋮⋮</span>
++          {isEmbedded?<span/>:<span className="drag-handle" title={ps?'Drag to move':'Drag to detach and move'}>⋮⋮</span>}
+           <button className="x" aria-label="Hide response" title="Hide response"
+             onPointerDown={e=>e.stopPropagation()}
+             onClick={hideResponse}>×</button>
+@@ -219,12 +257,12 @@ export default function Assistant(){
+     )}
+ 
+     {/* Docked tab — visible when the response is docked */}
+-    {r && docked && <DockedTab/>}
++    {r && dk && <DockedTab/>}
+ 
+     {/* Composer bar */}
+-    {!barHidden && (
+-      <div className="composer">
+-        {!r&&!m&&<div className="chips">{['How am I doing?','What should I do next?','Budget $1000','Image of a coffee cup'].map(c=><button key={c} onClick={()=>go(c)}>{c}</button>)}</div>}
++    {(isEmbedded||!barHidden) && (
++      <div className={'composer'+(isEmbedded?' embedded':'')}>
++        {!r&&!m&&!gen&&<div className="chips">{['How am I doing?','What should I do next?','Budget $1000','Image of a coffee cup'].map(c=><button key={c} onClick={()=>go(c)}>{c}</button>)}</div>}
+         {Rec&&(listening||vMsg||vNotice||vOpts||vOff)&&<div className="voicebar" role="status">
+           {vNotice&&<div><p className="mu" style={{margin:'0 0 6px'}}>{NOTICE}</p><button type="button" className="btn s" onClick={acceptNotice}>Got it, start listening</button> <button type="button" className="btn g s" onClick={()=>setVNotice(false)}>Cancel</button></div>}
+           {listening&&<span className="mu">Listening… speak now{cont?' (keeps listening until you stop)':''}</span>}
+@@ -234,19 +272,23 @@ export default function Assistant(){
+             <label className="mu"><input type="checkbox" style={{width:'auto'}} checked={cont} disabled={listening} onChange={e=>setCont(e.target.checked)}/> Keep listening</label></span>}
+           <button type="button" className="btn g s" aria-label="Voice options" aria-expanded={vOpts} onClick={()=>setVOpts(o=>!o)}>⚙</button>
+         </div>}
++        <div className="pgrow">
++          <button type="button" className={'pgtoggle'+(gen?' on':'')} aria-pressed={gen} title={gen?'Post generation is on: your message becomes an image prompt. Click to turn it off.':'Turn your message into a generated image instead of asking the assistant'} onClick={()=>setGen(g=>!g)}>{gen?'🪄 Post Generation ON':'🪄 Activate Post Generation'}</button>
++          {gen&&<select aria-label="Image shape" value={ratio} onChange={e=>setRatio(e.target.value)}><option value="1:1">1:1</option><option value="4:5">4:5</option><option value="9:16">9:16</option></select>}
++        </div>
+         <form onSubmit={send}>
+           <input ref={f} type="file" accept="image/*" hidden onChange={pick}/>
+           <button type="button" className={ref?'on':''} aria-label="Attach product photo" title="Attach a product photo to edit" onClick={()=>f.current?.click()}>{ICONS.clip}</button>
+-          <input value={m} onChange={e=>setM(e.target.value)} placeholder="Ask for analytics, an image, ideas, a budget…"/>
++          <input ref={txt} value={m} onChange={e=>setM(e.target.value)} placeholder={gen?'Describe the image you want to generate...':'Ask for analytics, an image, ideas, a budget…'}/>
+           {Rec&&<button type="button" className={'mic'+(listening?' listening':'')} disabled={!!vOff} aria-pressed={listening} aria-label={listening?'Stop voice input':'Start voice input'} title={vOff||(listening?'Stop voice input':'Speak your request')} onClick={micClick}>{ICONS.mic}</button>}
+           <button type="submit" disabled={b||!m.trim()}>{b?'…':'Send'}</button>
+-          <button type="button" className="toggle" aria-label="Hide assistant" title="Hide assistant" onClick={toggleBar}>{ICONS.chevDown}</button>
++          {!isEmbedded&&<button type="button" className="toggle" aria-label="Hide assistant" title="Hide assistant" onClick={toggleBar}>{ICONS.chevDown}</button>}
+         </form>
+       </div>
+     )}
+ 
+     {/* Restore pill when the bar is hidden */}
+-    {barHidden && (
++    {!isEmbedded && barHidden && (
+       <button
+         className="composer-restore"
+         aria-label="Show assistant"
+@@ -257,4 +299,5 @@ export default function Assistant(){
+         <span>Assistant</span>
+       </button>
+     )}
+-  </>}
+\ No newline at end of file
++  </>;
++  return isEmbedded?<div className="assistant-embed">{body}</div>:body}
+diff --git a/web/src/cc.ts b/web/src/cc.ts
+new file mode 100644
+index 0000000..d581457
+--- /dev/null
++++ b/web/src/cc.ts
+@@ -0,0 +1,86 @@
++// Command Center helpers. Pure (no React, no fetch) so test/commandCenter.test.js can run them in Node. Only erasable TypeScript syntax.
++
++export type Tip = { priority?: number; kind: string; text: string; why?: string; watch?: string };
++export type AlertItem = { id: number; kind: string; title: string; body: string; created_at: string; read_at: string | null };
++
++const round1 = (n: number) => +Math.abs(n).toFixed(1);
++const isNum = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
++
++// "Reach is up 12% on the previous 30 days" / "down" / "unchanged". null change = nothing to compare with.
++export function changeWords(label: string, value: number | string, pct: number | null | undefined, suffix = ''): string {
++  const v = typeof value === 'number' ? value.toLocaleString('en-US') : String(value);
++  if (!isNum(pct)) return `${label} is ${v}${suffix} over the last 30 days.`;
++  if (pct === 0) return `${label} is unchanged on the previous 30 days (${v}${suffix}).`;
++  return `${label} is ${pct > 0 ? 'up' : 'down'} ${round1(pct)}% on the previous 30 days (${v}${suffix}).`;
++}
++
++// The Morning Briefing. Uses /api/dashboard (reach, avgER), /api/ai/context (health, gaps) and, for the focus line, the top priority.
++// Says plainly when there is no data. Never invents a number: every figure comes from the inputs.
++export function briefing(i: { name?: string | null; dash?: any; ctx?: any; focus?: string | null }): { headline: string; lines: string[]; tone: 'good' | 'warn' | 'info' } {
++  const name = String(i.name ?? '').trim(), headline = name ? `Welcome back, ${name}.` : 'Welcome back.';
++  const d = i.dash, c = i.ctx, lines: string[] = [];
++  const hasPosts = isNum(c?.coverage?.posts) ? c.coverage.posts > 0 : isNum(d?.reach?.value) && d.reach.value > 0;
++  if (!d && !c) return { headline, lines: ['The briefing could not load yet.'], tone: 'info' };
++  if (!hasPosts) {
++    lines.push('There is no post data yet, so there is nothing to report on. Connect Instagram or import your posts to get a briefing.');
++    const gap = Array.isArray(c?.gaps) ? c.gaps.find((g: unknown) => typeof g === 'string' && g.trim()) : null;
++    if (gap) lines.push(`Focus on this first: ${gap}`);
++    return { headline, lines, tone: 'info' };
++  }
++  if (d?.reach && isNum(d.reach.value)) lines.push(changeWords('Reach', d.reach.value, d.reach.changePct));
++  if (d?.avgER && isNum(d.avgER.value)) lines.push(changeWords('Engagement rate', d.avgER.value, d.avgER.changePct, '%'));
++  const h = c?.health;
++  if (h && isNum(h.score)) lines.push(`Account health: ${h.score}${h.label ? ` (${h.label})` : ''}.`);
++  const focus = String(i.focus ?? '').trim();
++  if (focus) lines.push(`Focus on: ${focus}`);
++  const down = (isNum(d?.reach?.changePct) && d.reach.changePct < 0) || (isNum(h?.score) && h.score < 50);
++  const up = isNum(d?.reach?.changePct) && d.reach.changePct > 0 && !down;
++  return { headline, lines, tone: down ? 'warn' : up ? 'good' : 'info' };
++}
++
++// "Fix this" fills the chat with a question. Known kinds get a pointed question; anything else gets the priority's own words.
++const ASK: Record<string, string> = {
++  follower_drop: 'My followers have dropped recently. What are the most likely reasons and what should I do first?',
++  hashtags: 'How should I improve my hashtags? Tell me what to change this week.',
++  consistency: 'How do I post more consistently? Give me a simple weekly rhythm.',
++  content: 'Which of my formats works best, and how do I make more of it?',
++  collab: 'How do I set up a creator collaboration this week? Give me the first three steps.',
++  mention: 'How do I get more mentions and tags from other accounts? Give me concrete steps.',
++  community: 'How do I reply to my community faster and get more conversations going?',
++  giveaway: 'How should I run a giveaway that actually grows my account?',
++  swap: 'How do I set up a shoutout swap with a similar account?',
++  start: 'I am just starting. What should I do first to get useful numbers?',
++};
++export function fixQuestion(t: Tip): string {
++  const text = String(t?.text ?? '').trim().replace(/\s+/g, ' ');
++  if (t && Object.prototype.hasOwnProperty.call(ASK, t.kind)) return ASK[t.kind];
++  return text ? `One of my priorities is: "${text.slice(0, 160)}${text.length > 160 ? '…' : ''}" What exactly should I do this week to fix it?` : 'What should I do next?';
++}
++
++// Alerts banner: unread first, then newest, at most n.
++export function pickAlerts(items: AlertItem[] | null | undefined, n = 3): AlertItem[] {
++  return [...(items || [])].sort((a, b) => (a.read_at ? 1 : 0) - (b.read_at ? 1 : 0) || Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id).slice(0, n);
++}
++
++// Left-column widget. Green only when Instagram is really connected.
++export function connectionView(s: { status?: string; username?: string | null } | null | undefined): { on: boolean; label: string; title: string } {
++  if (!s) return { on: false, label: 'Instagram status unknown', title: 'Could not read the Instagram connection' };
++  if (s.status === 'connected') return { on: true, label: '@' + (s.username || 'instagram'), title: 'Instagram is connected' };
++  if (s.status === 'reconnect_needed') return { on: false, label: s.username ? '@' + s.username : 'Reconnect Instagram', title: 'The connection expired. Open Settings to connect again.' };
++  if (s.status === 'dev_env') return { on: false, label: 'Instagram (dev env)', title: 'Only a server-side development token is set, not your own account' };
++  return { on: false, label: 'Not connected', title: 'Open Settings to connect Instagram' };
++}
++
++// "Schedule this post": the body for POST /api/schedule, or a plain error. when = the value of a datetime-local input (local time).
++export const IMAGE_NOT_ATTACHED = 'The image is not attached to the queue item yet (public image storage is not set up), so only the caption is queued.';
++export function scheduleBody(caption: string, when: string, publicUrl: string | null | undefined, now: number): { body: { caption: string; image: string | null; scheduledAt: string } } | { error: string } {
++  const c = String(caption ?? '').trim();
++  if (!c) return { error: 'Write a caption first.' };
++  if (c.length > 2200) return { error: 'Keep the caption under 2,200 characters.' };
++  if (!String(when ?? '').trim()) return { error: 'Pick a date and time.' };
++  const t = new Date(when).getTime();
++  if (!Number.isFinite(t)) return { error: 'That date and time is not valid.' };
++  if (t < now - 60000) return { error: 'Pick a time in the future.' };
++  const url = typeof publicUrl === 'string' && /^https?:\/\//i.test(publicUrl) ? publicUrl : null;
++  return { body: { caption: c, image: url, scheduledAt: new Date(t).toISOString() } };
++}
+diff --git a/web/src/pages/CommandCenter.tsx b/web/src/pages/CommandCenter.tsx
+new file mode 100644
+index 0000000..846442a
+--- /dev/null
++++ b/web/src/pages/CommandCenter.tsx
+@@ -0,0 +1,83 @@
++// The default landing page: left = navigation + Instagram status + account, centre = morning briefing + the embedded assistant,
++// right = alerts, the daily report (top 3 priorities with "Fix this") and the goal card.
++import {useCallback,useEffect,useState} from 'react';
++import {api,useQ} from '../api';
++import {St,Card} from '../ui';
++import {ICONS} from '../icons';
++import Assistant from '../Assistant';
++import type {Prefill} from '../Assistant';
++import {GoalCard} from './DashboardCards';
++import type {IgStatus} from '../ig';
++import {briefing,fixQuestion,pickAlerts,connectionView} from '../cc';
++import type {Tip,AlertItem} from '../cc';
++
++// pages = the keys of App's PAGES map, passed in as props: importing PAGES from App would be a circular import (PAGES contains this page).
++type Props={pages:string[];page:string;go:(k:string)=>void;onLogout:()=>void};
++const ago=(v:string)=>{const m=Math.round((Date.now()-new Date(v).getTime())/6e4);return m<1?'just now':m<60?m+' min ago':m<1440?Math.round(m/60)+' h ago':Math.round(m/1440)+' d ago'};
++
++function Alerts(){
++  const[items,setItems]=useState<AlertItem[]>([]),[unread,setUnread]=useState(0),[err,setErr]=useState(''),[loaded,setLoaded]=useState(false);
++  const load=useCallback(()=>{api<{unread:number;items:AlertItem[]}>('/notifications').then(x=>{setItems(x.items);setUnread(x.unread);setErr('')}).catch(e=>setErr(e.message)).finally(()=>setLoaded(true))},[]);
++  useEffect(()=>{load();const t=setInterval(load,60000);return()=>clearInterval(t)},[load]);
++  const dismiss=(id:number)=>api('/notifications/'+id,{method:'DELETE'}).then(load).catch(e=>setErr(e.message));
++  const shown=pickAlerts(items,3);
++  return <Card full t={'Alerts'+(unread?` (${unread} new)`:'')} tip="Changes in reach and engagement, new bests, competitors pulling ahead. Dismiss one to remove it.">
++    {err&&<div className="st dn">⚠ {err}</div>}
++    {!err&&!loaded&&<div className="st">Loading…</div>}
++    {!err&&loaded&&!shown.length&&<p className="mu" style={{margin:0}}>No alerts. You will see one here when something changes.</p>}
++    {shown.map(n=><div key={n.id} className={'ccalert'+(n.read_at?'':' un')}>
++      <button className="nx" aria-label={'Dismiss alert: '+n.title} onClick={()=>dismiss(n.id)}>✕</button>
++      <b>{n.title}</b><p>{n.body}</p><span className="mu">{ago(n.created_at)}</span></div>)}
++    {items.length>shown.length&&<p className="mu" style={{margin:'6px 0 0'}}>{items.length-shown.length} more in the bell at the top.</p>}
++  </Card>}
++
++export default function CommandCenter({pages,page,go,onLogout}:Props){
++  const dash=useQ<any>('/dashboard'),ctx=useQ<any>('/ai/context'),pr=useQ<{priorities:Tip[]}>('/priorities'),prof=useQ<any>('/profile'),ig=useQ<IgStatus>('/instagram/status');
++  const[prefill,setPrefill]=useState<Prefill|null>(null);
++  const reloadIg=ig.reload;
++  useEffect(()=>{addEventListener('ig-changed',reloadIg);return()=>removeEventListener('ig-changed',reloadIg)},[reloadIg]);
++  const name=(prof.d?.display_name||'').trim(),tips=pr.d?.priorities||[];
++  const b=briefing({name,dash:dash.d,ctx:ctx.d,focus:tips[0]?.text});
++  const conn=connectionView(ig.e?null:ig.d);
++  return <div className="cc">
++    <aside className="cc-left" aria-label="Navigation">
++      <button className="ccconn" onClick={()=>go('Settings')} title={conn.title}>
++        <i className={'ccdot'+(conn.on?' on':' off')} aria-label={conn.on?'Connected':'Not connected'}/>
++        <span><b>{conn.label}</b><small className="mu">{conn.on?'Instagram connected':'Instagram not connected'}</small></span>
++      </button>
++      <nav className="ccnav">{pages.map(k=><button key={k} className={k===page?'on':''} aria-current={k===page?'page':undefined} onClick={()=>go(k)}>{ICONS[k]}{k}</button>)}</nav>
++      <div className="ccuser">
++        <div className="ccwho"><span className="ccav" aria-hidden="true">{(name||'U').slice(0,1).toUpperCase()}</span><span>{name||'Your account'}</span></div>
++        <button onClick={()=>go('Settings')}>{ICONS.Settings}Profile</button>
++        <button onClick={onLogout}>{ICONS.logout}Log out</button>
++      </div>
++    </aside>
++
++    <section className="cc-mid">
++      <Card full t="Morning Briefing">
++        <St l={(dash.l||ctx.l)&&!dash.d&&!ctx.d} e={dash.e&&ctx.e?dash.e:''}>
++          <div className={'ccbrief '+b.tone}>
++            <b className="cchead">{b.headline}</b>
++            {b.lines.map((l,i)=><p key={i}>{l}</p>)}
++          </div>
++        </St>
++      </Card>
++      <div className="card cc-chat"><Assistant isEmbedded prefill={prefill}/></div>
++    </section>
++
++    <aside className="cc-right">
++      <Alerts/>
++      <Card full t="Daily Report" tip="Your top three priorities today, ranked by expected impact.">
++        <St l={pr.l&&!pr.d} e={pr.e} empty={!!pr.d&&!tips.length}>
++          {tips.slice(0,3).map(t=><div key={t.kind} className="prio">
++            <div className="row" style={{margin:0,alignItems:'flex-start',flexWrap:'nowrap'}}>
++              <span className="pi">{ICONS[t.kind]||ICONS.start}</span>
++              <span style={{flex:1}}>{t.text}</span>
++              <button className="btn s" onClick={()=>setPrefill({id:Date.now(),text:fixQuestion(t)})}>Fix this</button>
++            </div>
++          </div>)}
++        </St>
++      </Card>
++      <GoalCard/>
++    </aside>
++  </div>}
+diff --git a/web/src/styles.css b/web/src/styles.css
+index 2d6f0ad..2c02e3c 100644
+--- a/web/src/styles.css
++++ b/web/src/styles.css
+@@ -287,3 +287,57 @@
+ @media (prefers-reduced-motion:reduce){.composer form button.mic.listening{animation:none;outline:2px solid #e1306c;border-radius:50%}}
+ .composer .voicebar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:6px 12px;margin-bottom:6px;font-size:13px}
+ 
++
++/* ---- Command Center: 3-column landing page (left nav / centre briefing + embedded chat / right alerts, report, goal) ---- */
++main.cc-main{padding-bottom:30px}
++main.cc-main > *{max-width:1440px}
++.cc{display:grid;grid-template-columns:240px minmax(0,1fr) 320px;gap:16px;align-items:start}
++.cc-mid,.cc-right{display:flex;flex-direction:column;gap:12px;min-width:0}
++.cc-left{position:sticky;top:16px;display:flex;flex-direction:column;gap:12px;min-height:calc(100vh - 150px);min-width:0}
++.ccconn{display:flex;gap:10px;align-items:center;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--bd);border-radius:12px;background:var(--soft);color:var(--tx);cursor:pointer}
++.ccconn:hover{border-color:var(--ac)}
++.ccconn span{display:flex;flex-direction:column;min-width:0}
++.ccconn b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++.ccdot{width:10px;height:10px;border-radius:50%;flex:none;background:var(--dn);box-shadow:0 0 0 3px rgba(237,73,86,.2)}
++.ccdot.on{background:var(--up);box-shadow:0 0 0 3px rgba(0,163,92,.2)}
++.ccnav{display:flex;flex-direction:column;gap:2px}
++.ccnav button,.ccuser button{display:flex;gap:12px;align-items:center;width:100%;padding:10px 12px;border:0;border-radius:8px;background:none;color:var(--tx);font:15px var(--font);cursor:pointer;text-align:left}
++.ccnav button:hover,.ccuser button:hover{background:var(--soft)}
++.ccnav button.on{font-weight:700;background:var(--soft)}
++.ccnav svg,.ccuser svg{width:20px;height:20px;flex:none}
++.ccuser{margin-top:auto;border-top:1px solid var(--bd);padding-top:10px;display:flex;flex-direction:column;gap:2px}
++.ccwho{display:flex;gap:10px;align-items:center;padding:6px 12px;font-weight:600;min-width:0}
++.ccwho span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++.ccav{width:30px;height:30px;border-radius:50%;background:var(--grad);color:#fff;display:grid;place-items:center;font-weight:700;flex:none}
++.ccbrief .cchead{font-size:18px;display:block;margin-bottom:4px}
++.ccbrief p{margin:4px 0}
++.ccbrief.good{border-left:3px solid var(--up);padding-left:12px}
++.ccbrief.warn{border-left:3px solid var(--dn);padding-left:12px}
++.cc-chat{display:flex;flex-direction:column;min-height:380px}
++.ccalert{position:relative;padding:8px 24px 8px 0;border-bottom:1px solid var(--bd)}
++.ccalert:last-of-type{border-bottom:0}
++.ccalert.un b::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ac);margin-right:6px}
++.ccalert p{margin:3px 0;font-size:13px}
++.ccalert .nx{position:absolute;top:6px;right:0}
++
++/* Assistant: embedded in a page (isEmbedded) instead of fixed to the bottom, and the post generation toggle (both modes) */
++.assistant-embed{display:flex;flex-direction:column;flex:1;min-height:0}
++.composer.embedded{position:static;transform:none;width:auto;margin-top:auto;transition:none;z-index:auto}
++.shell.drawer-open .composer.embedded{transform:none}
++.result.inline{position:static;width:auto;max-height:none;margin:0 0 12px;box-shadow:none;user-select:text;touch-action:auto;cursor:default;z-index:auto}
++.pgrow{display:flex;gap:8px;align-items:center;justify-content:center;margin:0 0 6px}
++.pgtoggle{background:var(--soft);border:1px solid var(--bd);border-radius:99px;padding:4px 12px;font:12px var(--font);color:var(--tx);cursor:pointer}
++.pgtoggle:hover{border-color:var(--ac)}
++.pgtoggle.on{background:var(--grad);color:#fff;border-color:transparent}
++.pgrow select{padding:3px 8px;font-size:12px;border-radius:99px}
++.schedthis{margin-top:8px}
++.schedthis textarea{margin:4px 0}
++
++@media (max-width:1180px){
++  .cc{grid-template-columns:200px minmax(0,1fr)}
++  .cc-right{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start}
++}
++@media (max-width:760px){
++  .cc{grid-template-columns:1fr}
++  .cc-mid{order:1}.cc-right{order:2;display:flex}.cc-left{order:3;position:static;min-height:0}
++}

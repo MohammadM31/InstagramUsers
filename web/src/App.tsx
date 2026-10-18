@@ -2,7 +2,7 @@ import {useState,useEffect} from 'react';
 import type {ComponentType} from 'react';
 import {tok,api} from './api';
 import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
+import CommandCenter from './pages/CommandCenter';
 import Analytics from './pages/Analytics';
 import Competitors from './pages/Competitors';
 import Content from './pages/Content';
@@ -19,7 +19,8 @@ import {parseIgRedirect} from './ig';
 
 const IGR=parseIgRedirect(); // /?ig=connected|error&reason=... after the Instagram login (A.1d); read once at load
 
-const PAGES:Record<string,ComponentType>={Dashboard,Statistics:Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,'Finance & Capital':Finance,Settings,Roadmap};
+// 'Dashboard' is now the Command Center (pages/Dashboard.tsx is no longer routed). CommandCenter takes props, hence ComponentType<any>.
+const PAGES:Record<string,ComponentType<any>>={Dashboard:CommandCenter,Statistics:Analytics,Competitors,'Content AI':Content,Scheduling:Schedule,'Finance & Capital':Finance,Settings,Roadmap};
 
 export default function App(){
   const[t,setT]=useState(tok()),[p,setP]=useState(IGR?'Settings':'Dashboard'),[igMsg,setIgMsg]=useState(IGR),[open,setOpen]=useState(false),[ob,setOb]=useState<'loading'|'needed'|'ok'>('loading'),
@@ -32,27 +33,28 @@ export default function App(){
   if(!t)return <Login onAuth={()=>setT(tok())}/>;
   if(ob==='loading')return <div className="st" style={{margin:24}}>Loading…</div>;
   if(ob==='needed')return <Onboarding igMsg={igMsg} onDone={()=>setOb('ok')}/>;
-  const P=PAGES[p];
+  const P=PAGES[p],cc=p==='Dashboard',logout=()=>{localStorage.removeItem('t');setT('')};
   return <div className={'shell'+(open?' drawer-open':'')}>
     <aside className="rail">
       <div className="logo">R</div>
       <button className="ib" aria-label="Menu" title="Menu" onClick={()=>setOpen(o=>!o)}>{ICONS.menu}</button>
       <button className="ib" aria-label="Toggle theme" title="Toggle theme" style={{marginTop:'auto'}} onClick={()=>setDk(d=>!d)}>{dk?ICONS.sun:ICONS.moon}</button>
-      <button className="ib" aria-label="Log out" title="Log out" onClick={()=>{localStorage.removeItem('t');setT('')}}>{ICONS.logout}</button>
+      <button className="ib" aria-label="Log out" title="Log out" onClick={logout}>{ICONS.logout}</button>
     </aside>
     <div className={'scrim'+(open?' on':'')} onClick={()=>setOpen(false)}/>
     <nav className={'drawer'+(open?' open':'')} aria-hidden={!open}>
       <h2>Explore</h2>
       {Object.keys(PAGES).map(k=><button key={k} className={k===p?'on':''} onClick={()=>{setP(k);setOpen(false)}}>{ICONS[k]}{k}</button>)}
     </nav>
-    <main>
+    <main className={cc?'cc-main':undefined}>
       <header className="top">
         <span className="wm">RaidTechs</span>
         <span className="mu">{p}</span>
         <span style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}><IgBadge onClick={()=>setP('Settings')}/><Notifications/></span>
       </header>
       {igMsg&&<div className={'banner '+(igMsg.ok?'ok':'bad')} role="status"><span>{igMsg.text}</span><button className="btn g s" onClick={()=>setIgMsg(null)}>Close</button></div>}
-      <P/>
+      {cc?<CommandCenter pages={Object.keys(PAGES)} page={p} go={setP} onLogout={logout}/>:<P/>}
     </main>
-    <Assistant/>
+    {/* The global bottom chat is hidden on the Command Center, which embeds its own. */}
+    {!cc&&<Assistant isEmbedded={false}/>}
   </div>}
