@@ -1,0 +1,386 @@
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+index c039b0c..ceecece 100644
+--- a/web/src/App.tsx
++++ b/web/src/App.tsx
+@@ -49,13 +49,11 @@ export default function App(){
+   const [p,setP] = useState(IGR ? 'Settings' : 'Dashboard');
+   const [igMsg,setIgMsg] = useState(IGR);
+   const [open,setOpen] = useState(false);
+-  // The left rail can be hidden completely (remembered); a small tab brings it back.
+-  const [railOff,setRailOff] = useState(()=>{try{return localStorage.getItem('rt:rail')==='0'}catch{return false}});
+   const [ob,setOb] = useState<'loading'|'needed'|'ok'>('loading');
+   const [dk,setDk] = useState(()=>localStorage.getItem('theme') ? localStorage.getItem('theme')==='dark' : matchMedia('(prefers-color-scheme:dark)').matches);
+ 
+   useEffect(()=>{document.documentElement.dataset.theme = dk ? 'dark' : 'light';localStorage.setItem('theme', dk ? 'dark' : 'light')},[dk]);
+-  useEffect(()=>{try{localStorage.setItem('rt:rail',railOff?'0':'1')}catch{}},[railOff]);
++  useEffect(()=>{try{localStorage.removeItem('rt:rail')}catch{}},[]); // the hideable sidebar was removed; drop its saved flag
+   useEffect(()=>{if(IGR)history.replaceState(null,'',location.pathname)},[]);
+   
+   // O.1: new accounts see the setup wizard first.
+@@ -77,22 +75,18 @@ export default function App(){
+   if(ob==='needed') return <Onboarding igMsg={igMsg} onDone={()=>setOb('ok')}/>;
+ 
+   const P=PAGES[p], cc=p==='Dashboard', logout=()=>{localStorage.removeItem('t');setT('')};
+-  
+-  const hideRail=()=>{setOpen(false);setRailOff(true)};
+ 
+-  return <div className={'shell'+(open?' drawer-open':'')+(railOff?' rail-hidden':'')}>
+-    <aside className="rail" aria-hidden={railOff}>
++  return <div className={'shell'+(open?' drawer-open':'')}>
++    <aside className="rail">
+       <div className="logo">R</div>
+-      <button className="ib" aria-label="Menu" title="Menu" tabIndex={railOff?-1:0} onClick={()=>setOpen(o=>!o)}>{ICONS.menu}</button>
+-      <button className="ib" aria-label="Hide sidebar" title="Hide sidebar" tabIndex={railOff?-1:0} onClick={hideRail}>{ICONS.chevLeft}</button>
+-      <button className="ib" aria-label="Toggle theme" title="Toggle theme" tabIndex={railOff?-1:0} style={{marginTop:'auto'}} onClick={()=>setDk(d=>!d)}>{dk?ICONS.sun:ICONS.moon}</button>
+-      <button className="ib" aria-label="Log out" title="Log out" tabIndex={railOff?-1:0} onClick={logout}>{ICONS.logout}</button>
++      <button className="ib" aria-label="Menu" title="Menu" onClick={()=>setOpen(o=>!o)}>{ICONS.menu}</button>
++      <button className="ib" aria-label="Toggle theme" title="Toggle theme" style={{marginTop:'auto'}} onClick={()=>setDk(d=>!d)}>{dk?ICONS.sun:ICONS.moon}</button>
++      <button className="ib" aria-label="Log out" title="Log out" onClick={logout}>{ICONS.logout}</button>
+     </aside>
+-    {railOff&&<button className="rail-show" aria-label="Show sidebar" title="Show sidebar" onClick={()=>setRailOff(false)}>{ICONS.chevRight}</button>}
+     <div className={'scrim'+(open?' on':'')} onClick={()=>setOpen(false)}/>
+     <nav className={'drawer'+(open?' open':'')} aria-hidden={!open}>
+       <h2>Explore</h2>
+-      {Object.keys(PAGES).map(k=><button key={k} className={k===p?'on':''} tabIndex={open?0:-1} onClick={()=>{setP(k);setOpen(false)}}>{ICONS[k]}{k}{SOON[k]&&<span className="soon">soon</span>}</button>)}
++      {Object.keys(PAGES).map(k=><button key={k} className={k===p?'on':''} onClick={()=>{setP(k);setOpen(false)}}>{ICONS[k]}{k}{SOON[k]&&<span className="soon">soon</span>}</button>)}
+     </nav>
+     <main className={cc?'cc-main':undefined}>
+       <header className="top">
+diff --git a/web/src/Assistant.tsx b/web/src/Assistant.tsx
+index 53428a3..c99d8f8 100644
+--- a/web/src/Assistant.tsx
++++ b/web/src/Assistant.tsx
+@@ -61,19 +61,17 @@ function Result({r,onSaved}:{r:R;onSaved:(t:string)=>void}){
+ 
+ const BAR_KEY='rt:assistant:bar';
+ const POS_KEY='rt:assistant:pos';
+-const DOCKED_KEY='rt:assistant:docked';   // 'left' | 'right' | 'top' | 'bottom' | null
+-const SNAP=40;   // px from an edge that triggers docking on release
++const OLD_DOCKED_KEY='rt:assistant:docked'; // docking was removed; the saved value is cleared once
+ const CARD_H=220; // approx card height for clamping
+ const REPORT_MSG='Give me my daily report: how my page is doing and what to do next.';
+ const WIDE=['analytics','finance','image'];
+ 
+-type Dock='left'|'right'|'top'|'bottom'|null;
+ type Msg={id:number;q:string;r:R|null};
+ 
+ export type Prefill={id:number;text:string;isReport?:boolean};
+ export type Activity={engaged:boolean;thread:boolean};
+ // isEmbedded=false: the global bar fixed at the bottom of the shell (every page except the Dashboard). Its reply is a floating card that can be
+-//   detached from the bar, dragged anywhere, docked to any of the four edges (collapses to a tab) or closed. The whole bar can be hidden.
++//   detached from the bar, dragged anywhere, attached back, or closed. The whole bar can be hidden.
+ // isEmbedded=true: the Dashboard chat. Replies are part of the page, as a conversation (your message, then the answer), in normal flow. No floating, no docking.
+ //   onActivity reports {engaged: the person focused/typed/has a conversation, thread: there is at least one message} so the page can hide its welcome text.
+ // prefill: set {id,text} to fill the input from outside; {id,isReport:true} sends the daily report request. A new id re-triggers.
+@@ -88,21 +86,16 @@ export default function Assistant({isEmbedded=false,prefill=null,onActivity}:{is
+ 
+   const[barHidden,setBarHidden]=useState(()=>localStorage.getItem(BAR_KEY)==='0');
+   const[pos,setPos]=useState<{x:number;y:number}|null>(()=>{try{const s=localStorage.getItem(POS_KEY);return s?JSON.parse(s):null}catch{return null}});
+-  const[docked,setDocked]=useState<Dock>(()=>{
+-    const s=localStorage.getItem(DOCKED_KEY);
+-    return (s==='left'||s==='right'||s==='top'||s==='bottom')?s:null;
+-  });
+-  const[dragging,setDragging]=useState(false),[edgeHint,setEdgeHint]=useState<Dock>(null),[fresh,setFresh]=useState(false);
++  const[dragging,setDragging]=useState(false);
+   const drag=useRef({dx:0,dy:0,on:false});
+   const cardRef=useRef<HTMLDivElement>(null);
+ 
+   useEffect(()=>{try{localStorage.setItem(BAR_KEY,barHidden?'0':'1')}catch{}},[barHidden]);
+   useEffect(()=>{try{pos?localStorage.setItem(POS_KEY,JSON.stringify(pos)):localStorage.removeItem(POS_KEY)}catch{}},[pos]);
+-  useEffect(()=>{try{docked?localStorage.setItem(DOCKED_KEY,docked):localStorage.removeItem(DOCKED_KEY)}catch{}},[docked]);
++  useEffect(()=>{try{localStorage.removeItem(OLD_DOCKED_KEY)}catch{}},[]);
+ 
+   useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]); // leaving the page ends any image polling loop
+   useEffect(()=>{if(!pos)return;const fit=()=>setPos(p=>p&&{x:Math.max(8,Math.min(p.x,window.innerWidth-120)),y:Math.max(8,Math.min(p.y,window.innerHeight-80))});addEventListener('resize',fit);return()=>removeEventListener('resize',fit)},[pos===null]); // eslint-disable-line react-hooks/exhaustive-deps
+-  useEffect(()=>{if(docked&&r)setFresh(true)},[r]); // eslint-disable-line react-hooks/exhaustive-deps
+ 
+   // Embedded: tell the page when the person is engaging, so the welcome text can step aside.
+   const engaged=th.length>0||m.length>0||focus||gen;
+@@ -110,9 +103,9 @@ export default function Assistant({isEmbedded=false,prefill=null,onActivity}:{is
+   useEffect(()=>{if(isEmbedded)threadRef.current?.scrollTo?.({top:threadRef.current.scrollHeight,behavior:'smooth'})},[th,isEmbedded]);
+ 
+   // The embedded chat never reads or writes the saved dock/position/hidden state of the global bar.
+-  const ps=isEmbedded?null:pos,dk:Dock=isEmbedded?null:docked;
++  const ps=isEmbedded?null:pos;
+ 
+-  // X button: closes the reply (the conversation itself is untouched). Placement (detached / docked) is kept for the next reply.
++  // X button: closes the reply (the conversation itself is untouched). Placement (attached or detached) is kept for the next reply.
+   const hideResponse=()=>setTh(t=>t.length?[...t.slice(0,-1)]:t);
+   // Hiding the bar does NOT clear the reply: it is preserved and re-shown on unhide.
+   const toggleBar=()=>setBarHidden(h=>!h);
+@@ -184,8 +177,7 @@ export default function Assistant({isEmbedded=false,prefill=null,onActivity}:{is
+     if(prefill.text){setGen(false);setM(prefill.text);setTimeout(()=>txt.current?.focus(),0)}
+   },[prefill?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+ 
+-  // ----- Floating card: drag by its header, snap to an edge to dock -----
+-  const railRight=()=>Math.max(0,document.querySelector('.rail')?.getBoundingClientRect().right||0);
++  // ----- Floating card: drag by its header; attach / detach with the link button -----
+   const onDown=(e:React.PointerEvent<HTMLDivElement>)=>{
+     if((e.target as HTMLElement).closest('button'))return;
+     const el=cardRef.current;if(!el)return;
+@@ -198,29 +190,19 @@ export default function Assistant({isEmbedded=false,prefill=null,onActivity}:{is
+     if(!drag.current.on)return;
+     const w=window.innerWidth,h=window.innerHeight,cw=cardRef.current?.offsetWidth||380;
+     setPos({x:Math.max(0,Math.min(w-cw,e.clientX-drag.current.dx)),y:Math.max(0,Math.min(h-48,e.clientY-drag.current.dy))});
+-    const px=e.clientX,py=e.clientY;
+-    setEdgeHint(px<SNAP?'left':px>w-SNAP?'right':py<SNAP?'top':py>h-SNAP?'bottom':null);
+   };
+   const onUp=(e:React.PointerEvent<HTMLDivElement>)=>{
+     if(!drag.current.on)return;
+-    drag.current.on=false;setDragging(false);setEdgeHint(null);
++    drag.current.on=false;setDragging(false);
+     e.currentTarget.releasePointerCapture?.(e.pointerId);
+-    const w=window.innerWidth,h=window.innerHeight,px=e.clientX,py=e.clientY,cw=cardRef.current?.offsetWidth||380;
+-    const to:Dock=px<SNAP?'left':px>w-SNAP?'right':py<SNAP?'top':py>h-SNAP?'bottom':null;
+-    if(to){setDocked(to);return}
++    const w=window.innerWidth,h=window.innerHeight,cw=cardRef.current?.offsetWidth||380;
+     setPos(p=>p&&{x:Math.max(8,Math.min(p.x,w-cw-8)),y:Math.max(8,Math.min(p.y,h-CARD_H-8))});
+   };
+   // Disconnect from the bar without dragging: the card stays where it is and becomes free-floating.
+   const detach=()=>{const el=cardRef.current;if(!el)return;const rc=el.getBoundingClientRect();setPos({x:rc.left,y:rc.top})};
+-  // Open a docked tab: the card returns next to the edge it was docked to.
+-  const undock=()=>{
+-    const w=window.innerWidth,h=window.innerHeight,cw=Math.min(w<=700?360:420,w-(w<=700?40:100)),rl=railRight();
+-    const p=docked==='left'?{x:rl+12,y:Math.max(12,(h-CARD_H)/2)}:docked==='right'?{x:w-cw-12,y:Math.max(12,(h-CARD_H)/2)}:docked==='top'?{x:(w-cw)/2,y:64}:{x:(w-cw)/2,y:Math.max(12,h-CARD_H-96)};
+-    setPos({x:Math.max(8,p.x),y:Math.max(8,p.y)});setDocked(null);setFresh(false);
+-  };
+ 
+   // Response visibility: the reply must exist; if the bar is hidden and the card is still attached to it, the card hides with it.
+-  const responseVisible=!!r&&(isEmbedded||!(barHidden&&pos===null&&docked===null));
++  const responseVisible=!!r&&(isEmbedded||!(barHidden&&pos===null));
+   const go=(t:string)=>{setM(t);setTimeout(()=>txt.current?.focus(),0)};
+   const onSaved=(id:number)=>(t:string)=>setTh(x=>x.map(y=>y.id===id&&y.r?{...y,r:applyEdit(y.r,t)}:y));
+   const fit=(p:{x:number;y:number})=>({left:Math.max(0,Math.min(p.x,window.innerWidth-120)),top:Math.max(0,Math.min(p.y,window.innerHeight-80))});
+@@ -234,24 +216,15 @@ export default function Assistant({isEmbedded=false,prefill=null,onActivity}:{is
+       </div>)}
+     </div>}
+ 
+-    {/* Floating: edge guides while dragging, so the four docking edges are visible. */}
+-    {!isEmbedded&&dragging&&<div className="edge-guides" aria-hidden="true">
+-      {(['left','right','top','bottom'] as const).map(s=><i key={s} className={'eg eg-'+s+(edgeHint===s?' hot':'')}/>)}
+-    </div>}
+-
+     {/* Floating: the reply card. Attached above the bar, or detached anywhere. */}
+-    {!isEmbedded&&responseVisible&&!dk&&r&&(
++    {!isEmbedded&&responseVisible&&r&&(
+       <div ref={cardRef} className={'card result '+(ps?'detached':'attached')+(dragging?' dragging':'')}
+         style={ps?{...fit(ps),position:'fixed',transform:'none',bottom:'auto',right:'auto'}:undefined}>
+         <div className="result-head" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
+-          <span className="drag-handle" title="Drag to move. Drag to an edge to dock.">⋮⋮</span>
++          <span className="drag-handle" title="Drag to move">⋮⋮</span>
+           <span className="dockbtns">
+             {ps?<button aria-label="Attach to the chat bar" title="Attach to the chat bar" onClick={()=>setPos(null)}>{ICONS.link}</button>
+               :<button aria-label="Detach from the chat bar" title="Detach from the chat bar" onClick={detach}>{ICONS.unlink}</button>}
+-            <button aria-label="Dock to the left edge" title="Dock to the left edge" onClick={()=>setDocked('left')}>{ICONS.arrowLeft}</button>
+-            <button aria-label="Dock to the top edge" title="Dock to the top edge" onClick={()=>setDocked('top')}>{ICONS.arrowUp}</button>
+-            <button aria-label="Dock to the right edge" title="Dock to the right edge" onClick={()=>setDocked('right')}>{ICONS.arrowRight}</button>
+-            <button aria-label="Dock to the bottom edge" title="Dock to the bottom edge" onClick={()=>setDocked('bottom')}>{ICONS.arrowDown}</button>
+             <button className="x" aria-label="Close response" title="Close response" onClick={hideResponse}>×</button>
+           </span>
+         </div>
+@@ -259,11 +232,6 @@ export default function Assistant({isEmbedded=false,prefill=null,onActivity}:{is
+       </div>
+     )}
+ 
+-    {/* Floating: the collapsed tab of a docked reply. */}
+-    {!isEmbedded&&r&&dk&&<button className={'docked-tab docked-'+dk+(fresh?' fresh':'')} aria-label="Show response" title="Show response" onClick={undock}>
+-      <span className="dock-dot"/><span>Result</span>
+-    </button>}
+-
+     {/* Composer bar */}
+     {(isEmbedded||!barHidden)&&(
+       <div className={'composer'+(isEmbedded?' embedded':'')} onFocus={()=>setFocus(true)} onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node|null))setFocus(false)}}>
+diff --git a/web/src/icons.tsx b/web/src/icons.tsx
+index 63d59c8..9e4362a 100644
+--- a/web/src/icons.tsx
++++ b/web/src/icons.tsx
+@@ -1,10 +1,10 @@
+-const P=(d:string)=><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d}/></svg>;
++const P=(d:string)=><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={d}/></svg>;
+ export const ICONS:Record<string,JSX.Element>={
+  menu:P('M3 6h18M3 12h18M3 18h18'),
+  mic:P('M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8'),
+- bell:P('M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0'),
+- Dashboard:P('M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z'),
+- Statistics:P('M4 20V10M10 20V4M16 20v-8M22 20H2'),
++ bell:P('M12 20.5s-8-4.9-8-11A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 8 2.5c0 6.1-8 11-8 11z'), // heart: Instagram's activity icon
++ Dashboard:P('M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z'),
++ Statistics:P('M5 20v-7M12 20V4M19 20v-10'),
+  start:P('M12 5v14M5 12h14'),
+  collab:P('M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8'),
+  mention:P('M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.9 7.9'),
+@@ -23,13 +23,13 @@ export const ICONS:Record<string,JSX.Element>={
+  sun:P('M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4'),
+  moon:P('M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z'),
+  clip:P('M21 11l-9 9a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.3-8.3'),
+- logout:P('M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9'),
++ logout:P('M9 4H5v16h4M16 8l4 4-4 4M20 12H9'),
+  chevDown:P('M6 9l6 6 6-6'),
+  chevUp:P('M18 15l-6-6-6 6'),
+- Marketing:P('M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13'),
+- CRM:P('M4 4h14a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2zM4 8H2M4 12H2M4 16H2M12 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8.5 17a3.5 3.5 0 0 1 7 0'),
+- Ads:P('M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z'),
+- Collabs:P('M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8'),
++ Marketing:P('M3 11v2a1 1 0 0 0 1 1h3l8 4V6L7 10H4a1 1 0 0 0-1 1zM18.5 9a4 4 0 0 1 0 6'),
++ CRM:P('M9 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM2.5 20a6.5 6.5 0 0 1 13 0M17 6.5a2.5 2.5 0 1 1 0 5M17.5 14a5 5 0 0 1 4 5'),
++ Ads:P('M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9z'),
++ Collabs:P('M9 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM15 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12z'),
+  chevLeft:P('M15 18l-6-6 6-6'),
+  chevRight:P('M9 18l6-6-6-6'),
+  arrowLeft:P('M19 12H5M12 19l-7-7 7-7'),
+diff --git a/web/src/styles.css b/web/src/styles.css
+index 30db163..764c2f5 100644
+--- a/web/src/styles.css
++++ b/web/src/styles.css
+@@ -1,17 +1,17 @@
+ /* RaidTechs — Instagram look, but with a rail that stays clickable, a main area that shifts with the drawer, and a movable assistant. */
+-:root{--bg:#fff;--card:#fff;--soft:#fafafa;--bd:#dbdbdb;--tx:#262626;--mu:#737373;--ac:#0095f6;--up:#00a35c;--dn:#ed4956;
+-  --grad:linear-gradient(45deg,#f09433,#e6683c 25%,#dc2743 50%,#cc2366 75%,#bc1888);
++:root{--bg:#fff;--card:#fff;--soft:#f2f2f2;--bd:#dbdbdb;--tx:#262626;--mu:#737373;--ac:#0064e0;--up:#1f8a4c;--dn:#c62a3a;--bub:#efefef;
++  --grad:linear-gradient(45deg,#feda75,#fa7e1e,#d62976,#962fbf,#4f5bd5);--mine:linear-gradient(135deg,#3797f0,#8134af);
+   --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+   --rail:72px;--rail-w:72px;--drawer:260px}
+-  :root[data-theme=dark]{--bg:#000;--card:#000;--soft:#121212;--bd:#262626;--tx:#f5f5f5;--mu:#a8a8a8}
+-  :root[data-theme=light]{--bg:#fff;--card:#fff;--soft:#fafafa;--bd:#dbdbdb;--tx:#262626;--mu:#737373}
++  :root[data-theme=dark]{--bg:#000;--card:#121212;--soft:#1a1a1a;--bd:#363636;--tx:#f5f5f5;--mu:#a8a8a8;--up:#4ade80;--dn:#ff7a85;--bub:#262626}
++  :root[data-theme=light]{--bg:#fff;--card:#fff;--soft:#f2f2f2;--bd:#dbdbdb;--tx:#262626;--mu:#737373;--up:#1f8a4c;--dn:#c62a3a;--bub:#efefef}
+   *{box-sizing:border-box}
+   body{margin:0;background:var(--bg);color:var(--tx);font:14px/18px var(--font)}
+   button{font:inherit}
+   .shell{display:flex;min-height:100vh}
+   
+   /* ---- Rail (fixed, above the scrim so its buttons stay clickable) ---- */
+-  .rail{width:var(--rail-w);transition:transform .25s ease;border-right:1px solid var(--bd);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:8px;
++  .rail{width:var(--rail-w);border-right:1px solid var(--bd);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:8px;
+     position:fixed;top:0;left:0;height:100vh;flex:none;background:var(--bg);z-index:40}
+   .logo{width:36px;height:36px;border-radius:50%;background:var(--grad);display:grid;place-items:center;color:#fff;font-weight:700;margin-bottom:16px}
+   .ib{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;background:none;border:0;color:var(--tx);cursor:pointer;position:relative;z-index:41}
+@@ -41,7 +41,7 @@
+   main > *{max-width:935px;margin-left:auto;margin-right:auto}
+   
+   .top{display:flex;align-items:baseline;gap:12px;margin:0 auto 20px;padding-bottom:12px;border-bottom:1px solid var(--bd);max-width:935px}
+-  .wm{font:italic 600 26px/1 'Segoe Script','Brush Script MT',cursive;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
++  .wm{font:700 26px/1 var(--font);letter-spacing:-.5px;background:linear-gradient(45deg,#d62976,#962fbf,#4f5bd5);-webkit-background-clip:text;background-clip:text;color:transparent}
+   .mu{color:var(--mu);font-size:12px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0;justify-content:space-between}
+   
+   /* ---- Buttons, cards, grids ---- */
+@@ -135,7 +135,7 @@
+   /* 2.2 expandable analysis row, 2.3 notification bell */
+   .xp td{background:var(--soft);padding:12px 16px;white-space:normal}
+   .bellw{position:relative}.bellw .ib{width:36px;height:36px}
+-  .bb{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;border-radius:8px;background:var(--dn);color:#fff;font-size:10px;font-weight:600;display:grid;place-items:center;padding:0 4px;pointer-events:none}
++  .bb{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;border-radius:8px;background:#ff3040;color:#fff;font-size:10px;font-weight:600;display:grid;place-items:center;padding:0 4px;pointer-events:none}
+   .nscrim{position:fixed;inset:0;z-index:29}
+   .nlist{position:absolute;right:0;top:42px;width:340px;max-width:90vw;max-height:420px;overflow:auto;background:var(--bg);border:1px solid var(--bd);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);z-index:60;padding:8px}
+   .nit{padding:10px;border-radius:8px;border-bottom:1px solid var(--bd);cursor:pointer}.nit:last-child{border-bottom:0}.nit:hover{background:var(--soft)}
+@@ -177,68 +177,6 @@
+   .result.attached,.shell.drawer-open .result.attached{left:50%;transform:translateX(-50%)}
+ }
+ 
+-/* Edge highlight while dragging */
+-.result.edge-left{box-shadow:-6px 0 0 0 var(--ac),0 8px 32px rgba(0,0,0,.18)}
+-.result.edge-right{box-shadow:6px 0 0 0 var(--ac),0 8px 32px rgba(0,0,0,.18)}
+-.result.edge-top{box-shadow:0 -6px 0 0 var(--ac),0 8px 32px rgba(0,0,0,.18)}
+-.result.edge-bottom{box-shadow:0 6px 0 0 var(--ac),0 8px 32px rgba(0,0,0,.18)}
+-
+-/* Docked tab — sits to the side of the rail, not under it */
+-.docked-tab{
+-  position:fixed;z-index:24;
+-  display:inline-flex;align-items:center;gap:8px;
+-  background:var(--card);border:1px solid var(--bd);
+-  color:var(--tx);font:600 12px var(--font);cursor:pointer;
+-  box-shadow:0 6px 20px rgba(0,0,0,.16);
+-  transition:transform .15s ease, left .25s ease, right .25s ease;
+-}
+-.docked-left:hover,
+-.docked-right:hover{transform:translateY(-50%) scale(1.02)}
+-.docked-top:hover,
+-.docked-bottom:hover{transform:translateX(-50%) scale(1.02)}
+-.dock-dot{width:8px;height:8px;border-radius:50%;background:var(--ac);flex:none}
+-
+-/* Left: pinned to the right edge of the rail */
+-.docked-left{
+-  left:var(--rail);
+-  top:50%;transform:translateY(-50%);
+-  border-left:0;border-radius:0 12px 12px 0;
+-  padding:14px 8px;
+-  writing-mode:vertical-rl;text-orientation:mixed;
+-}
+-
+-/* Right: pinned to the right edge of the viewport */
+-.docked-right{
+-  right:0;
+-  top:50%;transform:translateY(-50%);
+-  border-right:0;border-radius:12px 0 0 12px;
+-  padding:14px 8px;
+-  writing-mode:vertical-rl;text-orientation:mixed;
+-}
+-
+-/* Top: pinned below the header */
+-.docked-top{
+-  top:0;left:50%;transform:translateX(-50%);
+-  border-top:0;border-radius:0 0 12px 12px;
+-  padding:8px 14px;
+-}
+-
+-/* Bottom: pinned to the bottom edge */
+-.docked-bottom{
+-  bottom:0px;left:50%;transform:translateX(-50%);
+-  border-bottom:0;border-radius:12px 12px 0 0;
+-  padding:8px 14px;
+-}
+-
+-.shell.drawer-open .docked-left{left:calc(var(--rail) + var(--drawer))}
+-.shell.drawer-open .docked-top,
+-.shell.drawer-open .docked-bottom{left:calc(var(--rail) + var(--drawer) + (100vw - var(--rail) - var(--drawer))/2)}
+-
+-@media(max-width:700px){
+-  .docked-left,.docked-right{padding:10px 6px}
+-  .docked-bottom{bottom:72px}
+-}
+-
+   /* A.1d: Instagram connection badge and result banner */
+   .igbadge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--bd);background:var(--soft);color:var(--tx);border-radius:999px;padding:4px 10px;font:600 12px var(--font);cursor:pointer}
+   .igbadge .igdot{width:8px;height:8px;border-radius:50%;background:var(--mu);display:inline-block}
+@@ -551,14 +489,6 @@ main.cc-main > * {
+   height: 20px;
+ }
+ 
+-/* ---- Hideable sidebar ---- */
+-.shell.rail-hidden{--rail:0px}
+-.shell.rail-hidden .rail{transform:translateX(-100%);pointer-events:none;border-right-color:transparent}
+-.rail-show{position:fixed;top:14px;left:0;z-index:41;width:28px;height:44px;border:1px solid var(--bd);border-left:0;border-radius:0 12px 12px 0;
+-  background:var(--card);color:var(--tx);cursor:pointer;display:grid;place-items:center;box-shadow:0 4px 16px rgba(0,0,0,.12);padding:0}
+-.rail-show:hover{background:var(--soft)}
+-.rail-show svg{width:18px;height:18px}
+-.shell.drawer-open .rail-show{display:none}
+ .drawer .soon{margin-left:auto;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--mu);border:1px solid var(--bd);border-radius:99px;padding:1px 7px}
+ 
+ /* ---- "Not built yet" page ---- */
+@@ -570,13 +500,8 @@ main.cc-main > * {
+ .nb-ic svg{width:26px;height:26px}
+ .notbuilt .tag{display:inline-block;border:1px solid var(--bd);border-radius:99px;padding:2px 10px}
+ 
+-/* ---- Floating reply: edge guides shown while dragging, fresh-reply pulse on a docked tab ---- */
+-.edge-guides{position:fixed;inset:0;z-index:23;pointer-events:none}
+-.eg{position:absolute;background:var(--ac);opacity:.12;transition:opacity .12s}
+-.eg.hot{opacity:.45}
+-.eg-left{left:0;top:0;bottom:0;width:40px}.eg-right{right:0;top:0;bottom:0;width:40px}
+-.eg-top{top:0;left:0;right:0;height:40px}.eg-bottom{bottom:0;left:0;right:0;height:40px}
+-.docked-tab.fresh .dock-dot{animation:micpulse 1.2s ease-in-out infinite}
++/* ---- Assistant restore pill ---- */
++.dock-dot{width:8px;height:8px;border-radius:50%;background:var(--ac);flex:none}
+ .composer-restore .dock-dot{margin-left:2px}
+ 
+ /* ---- Dashboard chat: the composer is part of the page (not fixed), replies are a conversation ---- */
+@@ -595,8 +520,8 @@ main.cc-main > * {
+ .thread{flex:1;min-height:0;overflow-y:auto;padding:4px 2px 14px}
+ .thread .msg{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}
+ .bubble{padding:10px 14px;border-radius:18px;line-height:20px;overflow-wrap:anywhere;min-width:0}
+-.bubble.me{align-self:flex-end;max-width:85%;background:var(--ac);color:#fff;border-bottom-right-radius:6px}
+-.bubble.ai{align-self:flex-start;max-width:100%;background:var(--soft);border:1px solid var(--bd);border-bottom-left-radius:6px}
++.bubble.me{align-self:flex-end;max-width:85%;background:var(--mine);color:#fff;border-bottom-right-radius:6px}
++.bubble.ai{align-self:flex-start;max-width:100%;background:var(--bub);border:0;border-bottom-left-radius:6px}
+ .bubble.ai.wide{width:100%}
+ .bubble.ai p{margin:6px 0}.bubble.ai p:first-child{margin-top:0}
+ .bubble.ai img{width:min(100%,420px);border-radius:8px;display:block}

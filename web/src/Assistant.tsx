@@ -3,87 +3,83 @@ import type {FormEvent} from 'react';
 import {api} from './api';
 import {ICONS} from './icons';
 
-type R={type:string;text:string;data?:any;jobId?:string};
-export type Prefill={id:number;text:string;isReport?:boolean};
+export type Prefill={id:number;text:string};
 
-function Result({r}:{r:R}){
-  const d=r.data||{};
-  if(r.type==='image'&&d.url)return <><img src={d.url} alt="Generated"/><div className="row"><span className="mu">{r.text}</span><a className="btn s" href={d.url} download="post.png">Save</a></div></>;
-  if(r.type==='analytics')return <>
-    <div className="ring"><i>{d.health.score}</i></div><p style={{textAlign:'center'}}><b>{r.text}</b></p>
+type Msg =
+  | { role:'user'; text:string }
+  | { role:'assistant'; type:string; text:string; data?:any; jobId?:string };
+
+function Message({m}:{m:Msg}){
+  if(m.role==='user') return <div className="chat-msg user"><div className="bubble">{m.text}</div></div>;
+  const d=m.data||{};
+  let body;
+  if(m.type==='image'&&d.url) body = <><img src={d.url} alt="Generated"/><div className="row"><span className="mu">{m.text}</span><a className="btn s" href={d.url} download="post.png">Save</a></div></>;
+  else if(m.type==='analytics') body = <>
+    <div className="ring"><i>{d.health.score}</i></div><p style={{textAlign:'center'}}><b>{m.text}</b></p>
     <div className="row"><span>Reach 30d <b>{d.metrics.reach30d.toLocaleString()}</b></span><span>Engagement <b>{d.metrics.er}%</b></span><span>Reach change <b>{d.metrics.reachChange}%</b></span></div>
-    {d.top.map((t:any,i:number)=><p key={i}>• {t.text}</p>)}</>;
-  if(r.type==='finance')return <><span className="tag">${d.capital.toLocaleString()} suggested split</span>
-    {d.money.map((m:any)=><div key={m.area}><div className="row" style={{margin:0}}><span>{m.area}</span><b>${m.amount}</b></div><div className="bar"><div style={{width:m.share+'%'}}/></div></div>)}
-    {d.time.map((t:string,i:number)=><p key={i}>{t}</p>)}</>;
-  return <><p style={{margin:0}}>{r.text}</p>{d.more?.map((t:any,i:number)=><p key={i} className="mu">{t.text}</p>)}</>}
+    {d.top?.map((t:any,i:number)=><p key={i}>• {t.text}</p>)}</>;
+  else if(m.type==='finance') body = <><span className="tag">${d.capital.toLocaleString()} suggested split</span>
+    {d.money?.map((x:any)=><div key={x.area}><div className="row" style={{margin:0}}><span>{x.area}</span><b>${x.amount}</b></div><div className="bar"><div style={{width:x.share+'%'}}/></div></div>)}
+    {d.time?.map((t:string,i:number)=><p key={i}>{t}</p>)}</>;
+  else body = <><p style={{margin:0}}>{m.text}</p>{d.more?.map((t:any,i:number)=><p key={i} className="mu">{t.text}</p>)}</>;
+  return <div className="chat-msg assistant">
+    <div className="avatar"><span>AI</span></div>
+    <div className="bubble">{body}</div>
+  </div>;
+}
 
-export default function Assistant({isEmbedded=false, prefill=null}:{isEmbedded?:boolean; prefill?:Prefill|null}){
-  const [m,setM]=useState(''), [r,setR]=useState<R|null>(null), [b,setB]=useState(false), [ref,setRef]=useState(''),
+export default function Assistant({
+  isEmbedded = false,
+  variant = 'float',
+  prefill = null,
+  onInteract,
+}:{
+  isEmbedded?: boolean;
+  variant?: 'float' | 'page';
+  prefill?: Prefill | null;
+  onInteract?: () => void;
+}){
+  const [m,setM]=useState(''), [msgs,setMsgs]=useState<Msg[]>([]), [b,setB]=useState(false), [ref,setRef]=useState(''),
     f=useRef<HTMLInputElement>(null), seq=useRef(0);
-
   const [mode,setMode]=useState<'chat'|'image'>('chat');
   const [imgRatio,setImgRatio]=useState('1:1');
+  const [hidden,setHidden]=useState(false);
+  const [detached,setDetached]=useState(false);
+  const [docked,setDocked]=useState<null|'left'|'right'|'top'|'bottom'>(null);
+  const [dragPos,setDragPos]=useState<{x:number;y:number}|null>(null);
+  const [dragging,setDragging]=useState(false);
+  const [edge,setEdge]=useState<null|'left'|'right'|'top'|'bottom'>(null);
+  const cardRef=useRef<HTMLDivElement>(null);
+  const threadRef=useRef<HTMLDivElement>(null);
 
-  // Handle external prefill (like "Generate Daily Report")
-  useEffect(()=>{
-    if(prefill){
-      if(prefill.isReport){
-        generateReport();
-      } else {
-        setM(prefill.text);
-      }
-    }
-  },[prefill]);
+  const isPage = variant === 'page';
 
-  // Dedicated handler for the Daily Report that bypasses the chat AI
-  const generateReport = async () => {
-    setB(true);
-    setR({type:'info', text:'Generating your daily report...'});
-    try {
-      const [metrics, priorities] = await Promise.all([
-        api<any>('/ai/context'),
-        api<any>('/priorities')
-      ]);
-      
-      const health = metrics.health;
-      const gaps = metrics.gaps || [];
-      const tips = priorities.priorities || [];
-      
-      let text = `**Account Health:** ${health.label} (${health.score}/100)\n\n`;
-      text += `**Top Priorities:**\n`;
-      tips.slice(0,3).forEach((t:any, i:number) => {
-        text += `${i+1}. ${t.text}\n`;
-      });
-      if (gaps.length > 0) {
-        text += `\n**Watch out for:**\n${gaps[0]}\n`;
-      }
-      
-      setR({type:'info', text});
-    } catch (e:any) {
-      setR({type:'info', text:'Failed to generate report: ' + e.message});
-    }
-    setB(false);
-  };
+  useEffect(()=>{if(prefill){setM(prefill.text);onInteract?.()}},[prefill]); // eslint-disable-line
+  useEffect(()=>{if(threadRef.current)threadRef.current.scrollTop=threadRef.current.scrollHeight},[msgs]);
 
   const pick=(e:any)=>{const x=e.target.files?.[0];if(!x)return;const fr=new FileReader();fr.onload=()=>setRef(String(fr.result));fr.readAsDataURL(x)};
+  const push=(msg:Msg)=>setMsgs(list=>[...list,msg]);
 
   const send=async(e:FormEvent)=>{
     e.preventDefault();
     if(!m.trim()||b)return;
+    onInteract?.();
     setB(true);
     const id=++seq.current;
+    const userText=m;
+    push({role:'user',text:userText});
+    setM('');
     try{
       if(mode==='image'){
-        const x = await api<R>('/content/image',{method:'POST',body:{prompt:m, ratio:imgRatio, referenceImage:ref||undefined}});
+        const x = await api<any>('/content/image',{method:'POST',body:{prompt:userText, ratio:imgRatio, referenceImage:ref||undefined}});
         if (x.jobId) await poll(x.jobId, id);
       } else {
-        const x=await api<R>('/assistant',{method:'POST',body:{message:m,referenceImage:ref||undefined}});
-        setR(x);
-        if(x.type==='image'&&x.data?.jobId)await poll(x.data.jobId,id);
+        const x=await api<any>('/assistant',{method:'POST',body:{message:userText,referenceImage:ref||undefined}});
+        push({role:'assistant',type:x.type||'info',text:x.text||'',data:x.data});
+        if(x.type==='image'&&x.data?.jobId) await poll(x.data.jobId, id);
       }
-    }catch(x:any){setR({type:'info',text:x.message})}
-    setB(false);setM('');setRef('');
+    }catch(err:any){push({role:'assistant',type:'info',text:err.message})}
+    setB(false);setRef('');
   };
 
   const poll=async(jobId:string,id:number)=>{
@@ -91,47 +87,70 @@ export default function Assistant({isEmbedded=false, prefill=null}:{isEmbedded?:
       await new Promise(r=>setTimeout(r,2000));
       if(id!==seq.current)return;
       const s=await api<any>('/content/image/'+jobId);
-      if(s.status==='done'){setR({type:'image',text:'Here you go.',data:{url:s.images[0]}});return}
-      if(s.status==='failed'){setR({type:'info',text:'Image generation failed: '+(s.error||'try again')});return}
-      setR({type:'image',text:'Generating your image… '+i*2+'s',data:{jobId}});
+      if(s.status==='done'){push({role:'assistant',type:'image',text:'Here you go.',data:{url:s.images[0]}});return}
+      if(s.status==='failed'){push({role:'assistant',type:'info',text:'Image generation failed: '+(s.error||'try again')});return}
+      setMsgs(list=>{
+        const copy=[...list];
+        for(let k=copy.length-1;k>=0;k--){
+          const c=copy[k] as any;
+          if(c.role==='assistant'){copy[k]={...c,type:'image',text:'Generating your image… '+i*2+'s',data:{jobId}};break}
+        }
+        return copy;
+      });
     }
-    setR({type:'info',text:'Still generating after 60s. Try again in a moment.'});
+    push({role:'assistant',type:'info',text:'Still generating after 60s. Try again in a moment.'});
   };
 
-  const go=(t:string)=>setM(t);
-  const hideResponse=()=>setR(null);
+  const go=(t:string)=>{setM(t);onInteract?.()};
+  const clearThread=()=>setMsgs([]);
 
-  return <div className={isEmbedded ? "assistant-embed" : "composer"}>
-    
-    {r && (
-      <div className={isEmbedded ? 'card result inline' : 'card result attached'}>
-        <div className="result-head">
-          <span className="drag-handle" style={{visibility: isEmbedded ? 'hidden' : 'visible'}}>⋮⋮</span>
-          <button className="x" onClick={hideResponse}>×</button>
-        </div>
-        <Result r={r}/>
-      </div>
-    )}
+  const onPointerDown=(e:React.PointerEvent<HTMLDivElement>)=>{
+    if(isEmbedded||isPage)return;
+    if((e.target as HTMLElement).closest('button,a,input,select,textarea'))return;
+    const el=cardRef.current; if(!el)return;
+    const r=el.getBoundingClientRect();
+    setDragPos({x:e.clientX-r.left,y:e.clientY-r.top});
+    setDragging(true);
+    el.setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove=(e:React.PointerEvent<HTMLDivElement>)=>{
+    if(!dragging)return;
+    const el=cardRef.current; if(!el)return;
+    const off=dragPos||{x:40,y:24};
+    const w=el.offsetWidth||420, h=el.offsetHeight||200;
+    let x=e.clientX-off.x, y=e.clientY-off.y;
+    x=Math.max(8,Math.min(window.innerWidth-w-8, x));
+    y=Math.max(8,Math.min(window.innerHeight-h-8, y));
+    el.style.left=x+'px'; el.style.top=y+'px'; el.style.right='auto'; el.style.bottom='auto';
+    const t=64;
+    setEdge(e.clientY<t?'top':e.clientY>window.innerHeight-t?'bottom':e.clientX<t?'left':e.clientX>window.innerWidth-t?'right':null);
+  };
+  const onPointerUp=()=>{
+    setDragging(false);
+    if(edge){setDocked(edge);setDragPos(null);setEdge(null)}
+  };
 
-    <div className="assistant-bar-wrap">
-      {!m && !r && (
-        <div className="chips">
-          <button onClick={()=>go('How am I doing?')}>How am I doing?</button>
-          <button onClick={()=>go('What should I do next?')}>What should I do next?</button>
-          <button onClick={()=>go('Budget $1000')}>Budget $1000</button>
-          <button onClick={()=>go('Image of a coffee cup')}>Image of a coffee cup</button>
-        </div>
-      )}
+  const restore=()=>{setHidden(false);setDocked(null)};
 
+  const showSuggestions = msgs.length===0 && !m && !b;
+
+  const suggestionsRow = (
+    <div className={'suggestions-row'+(isPage?' suggestions-page':'')}>
+      <button onClick={()=>go('How am I doing?')}>How am I doing?</button>
+      <button onClick={()=>go('What should I do next?')}>What should I do next?</button>
+      <button onClick={()=>go('Budget $1000')}>Budget $1000</button>
+      <button onClick={()=>go('Image of a coffee cup')}>Image of a coffee cup</button>
+    </div>
+  );
+
+  const composerForm = (
+    <div className={isPage ? 'assistant-bar-wrap page-bar' : 'assistant-bar-wrap'}>
       <form onSubmit={send} className="chat-form">
         <input ref={f} type="file" accept="image/*" hidden onChange={pick}/>
         <button type="button" className={ref?'on':''} onClick={()=>f.current?.click()} title="Attach image">{ICONS.clip}</button>
-        
-        <input 
-          value={m} 
-          onChange={e=>setM(e.target.value)} 
-          placeholder={mode==='image' ? "Describe the image to generate..." : "Ask for analytics, an image, ideas, a budget…"}
-        />
+
+        <input value={m} onChange={e=>setM(e.target.value)}
+          placeholder={mode==='image' ? "Describe the image to generate..." : "Ask for analytics, an image, ideas, a budget…"}/>
 
         {mode==='image' && (
           <select value={imgRatio} onChange={e=>setImgRatio(e.target.value)} className="ratio-select">
@@ -141,13 +160,10 @@ export default function Assistant({isEmbedded=false, prefill=null}:{isEmbedded?:
           </select>
         )}
 
-        {/* Just an icon for post generation */}
-        <button 
-          type="button" 
-          className={'mode-toggle-icon'+(mode==='image'?' on':'')} 
-          onClick={()=>setMode(m=>m==='chat'?'image':'chat')}
-          title={mode==='image' ? "Turn off Image Generation" : "Turn on Image Generation"}
-        >
+        <button type="button"
+          className={'mode-toggle-icon'+(mode==='image'?' on':'')}
+          onClick={()=>setMode(mm=>mm==='chat'?'image':'chat')}
+          title={mode==='image' ? "Turn off Image Generation" : "Turn on Image Generation"}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
             <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
@@ -159,5 +175,115 @@ export default function Assistant({isEmbedded=false, prefill=null}:{isEmbedded?:
         <button type="submit" id="assistant-send" disabled={b||!m.trim()}>{b?'…':'Send'}</button>
       </form>
     </div>
-  </div>
+  );
+
+  const thread = (
+    <div className={isPage ? 'chat-thread page-thread' : 'chat-thread'} ref={threadRef}>
+      {msgs.map((msg,i)=><Message key={i} m={msg}/>)}
+      {b && <div className="chat-msg assistant"><div className="avatar"><span>AI</span></div><div className="bubble typing"><i/><i/><i/></div></div>}
+    </div>
+  );
+
+  // ---- PAGE VARIANT (Command Center) ----
+  if (isPage) {
+    return (
+      <div className="assistant-page">
+        {showSuggestions && suggestionsRow}
+        {msgs.length > 0 && thread}
+        {composerForm}
+      </div>
+    );
+  }
+
+  // ---- FLOATING / EMBEDDED VARIANTS ----
+
+  // Attached tab: only visible while the composer is visible.
+  const attachedTab = !isEmbedded && !detached && msgs.length > 0 && (
+    <div
+      ref={cardRef}
+      className={`result-tab attached ${dragging ? 'dragging' : ''}`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
+      <div className="result-head">
+        <span className="drag-handle">⋮⋮</span>
+        <div style={{display:'flex',gap:4}}>
+          <button className="x" title="Detach from the assistant bar" onClick={()=>setDetached(true)}>⤢</button>
+          <button className="x" onClick={clearThread} aria-label="Close">×</button>
+        </div>
+      </div>
+      {thread}
+    </div>
+  );
+
+  // Detached tab: independent floating card. Survives the composer being hidden, can be dragged, docks to an edge.
+  const detachedTab = !isEmbedded && detached && msgs.length > 0 && (
+    <div
+      ref={cardRef}
+      className={`result-tab detached ${dragging ? 'dragging' : ''} ${edge ? 'edge-'+edge : ''}`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
+      <div className="result-head">
+        <span className="drag-handle">⋮⋮</span>
+        <div style={{display:'flex',gap:4}}>
+          <button className="x" title="Attach to the assistant bar" onClick={()=>setDetached(false)}>⇤</button>
+          <button className="x" onClick={clearThread} aria-label="Close">×</button>
+        </div>
+      </div>
+      {thread}
+    </div>
+  );
+
+  // Embedded (not used by CommandCenter anymore, kept for compatibility): inline card.
+  const embeddedTab = isEmbedded && msgs.length > 0 && (
+    <div className="result-tab" ref={cardRef}>
+      <div className="result-head">
+        <span className="drag-handle" style={{visibility:'hidden'}}>⋮⋮</span>
+        <button className="x" onClick={clearThread} aria-label="Close">×</button>
+      </div>
+      {thread}
+    </div>
+  );
+
+  // If the tab was docked to an edge while detached, clicking restores the tab but keeps the composer hidden state.
+  if (docked && !isEmbedded && detached) {
+    return <button className={`docked-tab docked-${docked}`} onClick={()=>setDocked(null)} title="Restore response">
+      <span className="dock-dot"/>
+      <span>Assistant {msgs.length>0 && <>({msgs.length})</>}</span>
+    </button>;
+  }
+
+  // Composer hidden: only the restore button (and, if it exists, the detached tab).
+  if (hidden) {
+    return <>
+      {detachedTab}
+      <button className="composer-restore" onClick={restore} title="Show the assistant">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Assistant
+      </button>
+    </>;
+  }
+
+  if (docked && !isEmbedded) {
+    const cls = `docked-tab docked-${docked}`;
+    return <button className={cls} onClick={restore} title="Restore assistant">
+      <span className="dock-dot"/>
+      <span>Assistant {msgs.length>0 && <>({msgs.length})</>}</span>
+    </button>;
+  }
+
+  return <>
+    {attachedTab}
+    {detachedTab}
+    {embeddedTab}
+    <div className="composer">
+      {showSuggestions && suggestionsRow}
+      {composerForm}
+    </div>
+  </>;
 }
