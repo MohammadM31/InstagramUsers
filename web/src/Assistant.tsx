@@ -46,16 +46,26 @@ export default function Assistant({
   const [hidden,setHidden]=useState(false);
   const [detached,setDetached]=useState(false);
   const [docked,setDocked]=useState<null|'left'|'right'|'top'|'bottom'>(null);
-  const [dragPos,setDragPos]=useState<{x:number;y:number}|null>(null);
   const [dragging,setDragging]=useState(false);
   const [edge,setEdge]=useState<null|'left'|'right'|'top'|'bottom'>(null);
   const cardRef=useRef<HTMLDivElement>(null);
   const threadRef=useRef<HTMLDivElement>(null);
 
+  // Drag state kept in refs so pointermove never triggers a React render.
+  const dragState=useRef<{ox:number;oy:number;x:number;y:number}|null>(null);
+  const rafRef=useRef<number|null>(null);
+  const edgeRef=useRef<null|'left'|'right'|'top'|'bottom'>(null);
+
   const isPage = variant === 'page';
 
   useEffect(()=>{if(prefill){setM(prefill.text);onInteract?.()}},[prefill]); // eslint-disable-line
   useEffect(()=>{if(threadRef.current)threadRef.current.scrollTop=threadRef.current.scrollHeight},[msgs]);
+  // Safety net: Escape restores the hidden composer.
+  useEffect(()=>{
+    const onKey=(e:KeyboardEvent)=>{ if(e.key==='Escape' && hidden){ setHidden(false); setDocked(null); } };
+    addEventListener('keydown', onKey);
+    return ()=>removeEventListener('keydown', onKey);
+  },[hidden]);
 
   const pick=(e:any)=>{const x=e.target.files?.[0];if(!x)return;const fr=new FileReader();fr.onload=()=>setRef(String(fr.result));fr.readAsDataURL(x)};
   const push=(msg:Msg)=>setMsgs(list=>[...list,msg]);
@@ -109,28 +119,53 @@ export default function Assistant({
     if((e.target as HTMLElement).closest('button,a,input,select,textarea'))return;
     const el=cardRef.current; if(!el)return;
     const r=el.getBoundingClientRect();
-    setDragPos({x:e.clientX-r.left,y:e.clientY-r.top});
+    // Take over positioning: pin to top-left and use translate3d for smooth movement.
+    el.style.left='0px'; el.style.top='0px'; el.style.right='auto'; el.style.bottom='auto';
+    el.style.transform=`translate3d(${r.left}px, ${r.top}px, 0)`;
+    el.style.willChange='transform';
+    dragState.current={ox:e.clientX-r.left, oy:e.clientY-r.top, x:r.left, y:r.top};
+    edgeRef.current=null;
     setDragging(true);
     el.setPointerCapture?.(e.pointerId);
   };
   const onPointerMove=(e:React.PointerEvent<HTMLDivElement>)=>{
-    if(!dragging)return;
+    const ds=dragState.current; if(!ds)return;
     const el=cardRef.current; if(!el)return;
-    const off=dragPos||{x:40,y:24};
     const w=el.offsetWidth||420, h=el.offsetHeight||200;
-    let x=e.clientX-off.x, y=e.clientY-off.y;
-    x=Math.max(8,Math.min(window.innerWidth-w-8, x));
-    y=Math.max(8,Math.min(window.innerHeight-h-8, y));
-    el.style.left=x+'px'; el.style.top=y+'px'; el.style.right='auto'; el.style.bottom='auto';
+    const x=Math.max(8,Math.min(window.innerWidth-w-8, e.clientX-ds.ox));
+    const y=Math.max(8,Math.min(window.innerHeight-h-8, e.clientY-ds.oy));
+    ds.x=x; ds.y=y;
+    if(rafRef.current==null){
+      rafRef.current=requestAnimationFrame(()=>{
+        rafRef.current=null;
+        const cur=dragState.current; const c=cardRef.current; if(!cur||!c)return;
+        c.style.transform=`translate3d(${cur.x}px, ${cur.y}px, 0)`;
+      });
+    }
     const t=64;
-    setEdge(e.clientY<t?'top':e.clientY>window.innerHeight-t?'bottom':e.clientX<t?'left':e.clientX>window.innerWidth-t?'right':null);
+    const nextEdge = e.clientY<t?'top':e.clientY>window.innerHeight-t?'bottom':e.clientX<t?'left':e.clientX>window.innerWidth-t?'right':null;
+    if(nextEdge!==edgeRef.current){ edgeRef.current=nextEdge; setEdge(nextEdge); }
   };
   const onPointerUp=()=>{
+    const el=cardRef.current;
+    if(el){
+      if(edgeRef.current){
+        // Snap to edge: drop inline positioning so the docked-tab CSS takes over on re-render.
+        el.style.left=''; el.style.top=''; el.style.right=''; el.style.bottom=''; el.style.transform=''; el.style.willChange='';
+      } else {
+        // Stay where it was dropped.
+        el.style.transform=`translate3d(${dragState.current?.x ?? 0}px, ${dragState.current?.y ?? 0}px, 0)`;
+        el.style.willChange='';
+      }
+    }
+    dragState.current=null;
+    if(rafRef.current!=null){cancelAnimationFrame(rafRef.current);rafRef.current=null;}
     setDragging(false);
-    if(edge){setDocked(edge);setDragPos(null);setEdge(null)}
+    if(edgeRef.current){ setDocked(edgeRef.current); edgeRef.current=null; setEdge(null); }
   };
 
   const restore=()=>{setHidden(false);setDocked(null)};
+  const hideComposer=()=>setHidden(true);
 
   const showSuggestions = msgs.length===0 && !m && !b;
 
@@ -143,7 +178,8 @@ export default function Assistant({
     </div>
   );
 
-  const composerForm = (
+  // Pass `floating` to include the down-arrow hide button (used by the floating composer only).
+  const composerForm = (floating=false) => (
     <div className={isPage ? 'assistant-bar-wrap page-bar' : 'assistant-bar-wrap'}>
       <form onSubmit={send} className="chat-form">
         <input ref={f} type="file" accept="image/*" hidden onChange={pick}/>
@@ -172,6 +208,15 @@ export default function Assistant({
           </svg>
         </button>
 
+        {floating && (
+          <button type="button" className="composer-hide" onClick={hideComposer}
+            title="Hide the assistant bar" aria-label="Hide the assistant bar">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 9l6 6 6-6"/>
+            </svg>
+          </button>
+        )}
+
         <button type="submit" id="assistant-send" disabled={b||!m.trim()}>{b?'…':'Send'}</button>
       </form>
     </div>
@@ -190,7 +235,7 @@ export default function Assistant({
       <div className="assistant-page">
         {showSuggestions && suggestionsRow}
         {msgs.length > 0 && thread}
-        {composerForm}
+        {composerForm()}
       </div>
     );
   }
@@ -250,18 +295,20 @@ export default function Assistant({
     </div>
   );
 
-  // If the tab was docked to an edge while detached, clicking restores the tab but keeps the composer hidden state.
-  if (docked && !isEmbedded && detached) {
-    return <button className={`docked-tab docked-${docked}`} onClick={()=>setDocked(null)} title="Restore response">
-      <span className="dock-dot"/>
-      <span>Assistant {msgs.length>0 && <>({msgs.length})</>}</span>
-    </button>;
-  }
-
-  // Composer hidden: only the restore button (and, if it exists, the detached tab).
+  // Composer hidden. Render the restore button ALWAYS, plus any tab that should stay visible.
   if (hidden) {
     return <>
       {detachedTab}
+      {docked && !isEmbedded && (
+        <button
+          className={`docked-tab docked-${docked}`}
+          onClick={()=>{ setDocked(null); if(!detached) setHidden(false); }}
+          title="Restore response"
+        >
+          <span className="dock-dot"/>
+          <span>Assistant {msgs.length>0 && <>({msgs.length})</>}</span>
+        </button>
+      )}
       <button className="composer-restore" onClick={restore} title="Show the assistant">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         Assistant
@@ -269,9 +316,10 @@ export default function Assistant({
     </>;
   }
 
+  // Visible composer but the response has been dragged to an edge → show the docked tab in its place.
   if (docked && !isEmbedded) {
     const cls = `docked-tab docked-${docked}`;
-    return <button className={cls} onClick={restore} title="Restore assistant">
+    return <button className={cls} onClick={()=>setDocked(null)} title="Restore assistant">
       <span className="dock-dot"/>
       <span>Assistant {msgs.length>0 && <>({msgs.length})</>}</span>
     </button>;
@@ -283,7 +331,7 @@ export default function Assistant({
     {embeddedTab}
     <div className="composer">
       {showSuggestions && suggestionsRow}
-      {composerForm}
+      {composerForm(true)}
     </div>
   </>;
 }

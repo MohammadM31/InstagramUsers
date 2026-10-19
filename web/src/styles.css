@@ -142,6 +142,7 @@ mark{background:#f0943355;color:inherit}
   background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:12px;
   box-shadow:0 8px 32px rgba(0,0,0,.18);z-index:25;user-select:none;touch-action:none;
   animation:pop .2s;max-height:60vh;display:flex;flex-direction:column;
+  will-change:transform;backface-visibility:hidden;
 }
 @keyframes pop{from{opacity:0;transform:translateY(8px)}}
 
@@ -152,13 +153,12 @@ mark{background:#f0943355;color:inherit}
 }
 .composer .result-tab.dragging{cursor:grabbing;box-shadow:0 12px 40px rgba(0,0,0,.28);transform:none}
 
-/* --- added: attached vs detached tabs --- */
-/* Attached tab follows the composer: fixed above the bar, hides with it (rendered conditionally). */
+/* Attached vs detached tabs */
 .result-tab.attached{position:fixed;bottom:84px;left:calc(var(--side)/2 + 50%);transform:translateX(-50%);width:min(560px,calc(100vw - var(--side) - 48px))}
 .result-tab.attached.dragging{transform:none}
-/* Detached tab floats independently; identical position by default, but survives composer hide. */
 .result-tab.detached{position:fixed;bottom:96px;left:calc(var(--side)/2 + 50%);transform:translateX(-50%);width:min(560px,calc(100vw - var(--side) - 48px))}
 .result-tab.detached.dragging{transform:none}
+.result-tab.dragging{cursor:grabbing;transition:none !important}
 
 /* Embedded dashboard override */
 .cc-chat-wrapper .result-tab{position:relative;width:100%;max-height:420px;box-shadow:0 4px 12px rgba(0,0,0,.05);margin-bottom:16px}
@@ -194,27 +194,46 @@ mark{background:#f0943355;color:inherit}
 .bubble.typing i:nth-child(3){animation-delay:.3s}
 @keyframes typing{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
 
-/* --- added: full-page assistant (Command Center) --- */
+/* Full-page assistant (Command Center) */
 .assistant-page{width:100%;max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
 .assistant-page .page-thread{max-height:none;overflow:visible;gap:14px;padding:0}
 .assistant-page .chat-msg.assistant .bubble{max-width:80%}
 .assistant-page .page-bar{position:sticky;bottom:12px;margin-top:6px}
 .suggestions-page{justify-content:center;padding-bottom:6px}
 
-/* Floating restore button */
-.composer-restore{position:fixed;bottom:24px;right:24px;z-index:20;display:inline-flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--bd);border-radius:22px;padding:10px 18px;color:var(--tx);font:600 14px var(--font);cursor:pointer;box-shadow:0 6px 24px rgba(0,0,0,.14);transition:transform .15s ease,box-shadow .15s ease}
+/* Floating restore button (kept for compatibility; unused now that the composer cannot hide) */
+.composer-restore{position:fixed;bottom:24px;right:24px;z-index:120;display:inline-flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--bd);border-radius:22px;padding:10px 18px;color:var(--tx);font:600 14px var(--font);cursor:pointer;box-shadow:0 6px 24px rgba(0,0,0,.14);transition:transform .15s ease,box-shadow .15s ease}
 .composer-restore:hover{transform:translateY(-1px);box-shadow:0 8px 28px rgba(0,0,0,.18)}
 .composer-restore svg{width:18px;height:18px;color:var(--ac)}
 
-/* Docked tab (hidden to edges) */
-.docked-tab{position:fixed;z-index:24;display:inline-flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--bd);color:var(--tx);font:600 12px var(--font);cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.16);transition:transform .15s ease,left .25s ease,right .25s ease}
+/* Docked tab (response snapped to an edge).
+   Sits flush against the top / bottom edge, like the left / right variants.
+   z-index above .tb (50) and .composer (20) so it is always clickable even when it overlaps them.
+   The click handler is on the button itself, so nothing underneath can swallow it. */
+.docked-tab{
+  position:fixed;
+  z-index:200;
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  background:var(--card);
+  border:1px solid var(--bd);
+  color:var(--tx);
+  font:600 12px var(--font);
+  cursor:pointer;
+  box-shadow:0 6px 20px rgba(0,0,0,.16);
+  pointer-events:auto;
+  transition:transform .15s ease,left .25s ease,right .25s ease;
+}
 .docked-left:hover,.docked-right:hover{transform:translateY(-50%) scale(1.02)}
 .docked-top:hover,.docked-bottom:hover{transform:translateX(-50%) scale(1.02)}
 .dock-dot{width:8px;height:8px;border-radius:50%;background:var(--ac);flex:none}
 .docked-left{left:var(--side);top:50%;transform:translateY(-50%);border-left:0;border-radius:0 12px 12px 0;padding:14px 8px;writing-mode:vertical-rl;text-orientation:mixed}
 .docked-right{right:0;top:50%;transform:translateY(-50%);border-right:0;border-radius:12px 0 0 12px;padding:14px 8px;writing-mode:vertical-rl;text-orientation:mixed}
+/* Flush to the top edge; only the bottom corners are rounded so it reads like a tab hanging from the edge. */
 .docked-top{top:0;left:50%;transform:translateX(-50%);border-top:0;border-radius:0 0 12px 12px;padding:8px 14px}
-.docked-bottom{bottom:0px;left:50%;transform:translateX(-50%);border-bottom:0;border-radius:12px 12px 0 0;padding:8px 14px}
+/* Flush to the bottom edge; only the top corners are rounded. */
+.docked-bottom{bottom:0;left:50%;transform:translateX(-50%);border-bottom:0;border-radius:12px 12px 0 0;padding:8px 14px}
 
 /* ---- Notifications & Bell ---- */
 .xp td{background:var(--soft);padding:12px 16px;white-space:normal}
@@ -296,9 +315,12 @@ main.cc-main > *{max-width:100%}
   main{padding:24px 14px 200px}
   .result{width:min(360px,calc(100vw - 40px))}
   .docked-left,.docked-right{padding:10px 6px}
-  .docked-bottom{bottom:72px}
   .cc-briefing-watermark h1{font-size:36px}
   .cc-briefing-watermark p{font-size:16px}
   .cc-chat-wrapper{padding:0 10px}
   .assistant-page{max-width:100%}
 }
+
+/* --- hide button inside the floating composer (unused now; kept for compatibility) --- */
+.chat-form .composer-hide{color:var(--mu)}
+.chat-form .composer-hide:hover{background:var(--soft);color:var(--tx)}
