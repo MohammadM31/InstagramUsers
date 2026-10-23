@@ -2,7 +2,7 @@
 import { q } from './db.js';
 import { enqueueImage, hasReplicateKey } from './imagejobs.js'; // 0.8: image work runs on the same queue as Content AI
 import { advise, health, financePlan } from './advisor.js';
-import { llmConfig } from './keys.js';
+import { llmConfig, llmChat } from './keys.js';
 import { hit } from './ratelimit.js';
 import { currentVoice, voiceInstruction } from './brandvoice.js'; // O.3: the saved brand voice shapes the wording of the reply
 
@@ -54,18 +54,16 @@ async function route(text, m, tips, uid) {
   const cfg = await llmConfig(uid); // 0.4: user's stored key first, env fallback
   if (cfg) try {
     const voice = voiceInstruction(await currentVoice(q, uid).catch(() => null)); // '' when none
-    const r = await fetch(cfg.base + '/chat/completions', {
-      method: 'POST', headers: { Authorization: 'Bearer ' + cfg.key, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(10000),
-      body: JSON.stringify({ model: cfg.model, response_format: { type: 'json_object' }, messages: [
+    const j = await llmChat(cfg, { response_format: { type: 'json_object' }, messages: [
         { role: 'system', content: `You are the assistant inside an Instagram growth tool. You know this page's live state:\n${JSON.stringify({ metrics: m, health: health(m), priorities: tips.slice(0, 4).map(t => t.text) })}\n` +
           `Pick ONE action for the user's request. Return JSON {"intent":"image|analytics|finance|tip|info","text":"","imagePrompt":"","capital":0}. ` +
           `"text" is at most 20 words, plain and brief, no greeting. Use intent "image" only if they want a picture made (put the visual in imagePrompt). "analytics" for performance/progress/page info, "finance" for budget or capital (put the amount in capital), "tip" for what to do next. ` +
           `When advising, prefer collaborations, mentions, reshares, giveaways and community over hashtags or posting more. Never invent numbers not in the state.` +
           (voice ? `\nBrand voice for the wording of "text" (the limits above still apply): ${voice}` : '') },
-        { role: 'user', content: text }] }) });
-    const j = await r.json(), o = JSON.parse(j.choices[0].message.content);
+        { role: 'user', content: text }] }, 20000);
+    const o = JSON.parse(j.choices[0].message.content);
     if (['image', 'analytics', 'finance', 'tip', 'info'].includes(o.intent)) return o;
-  } catch { /* fall through to rules */ }
+  } catch (e) { console.warn('[assistant] LLM failed, using regex rules:', e.message); }
   if (has(text, /\b(image|picture|photo|visual|generate|draw)\b/)) return { intent: 'image', imagePrompt: imagePrompt(text) };
   if (has(text, /\b(finance|capital|budget|invest|spend|money|afford)\b/)) return { intent: 'finance', capital: amount(text) };
   if (has(text, /\b(analytic|stats|metrics|performance|how am i|report|insight|progress|health)\b/)) return { intent: 'analytics' };
