@@ -35,10 +35,24 @@ export const processImport=makeProcessImport({db,q,own:igOwnPosts});
 /* ---- 0.5 generateImage: runs off the request path; GET /api/content/image/:jobId reads the result ---- */
 // C.1: results stay base64 data URIs in the job's return value (1h TTL, unchanged). When the S3_* variables are set, each image is also converted to JPEG
 // and uploaded, and the result gains `urls` (public JPEG urls, see storage.js / imageresult.js). No S3_* variables = exactly the old result.
-import {makeStorage} from './storage.js';import {makeProcessImage} from './imageresult.js';import {makeStoredImages} from './storedimages.js';
+import {makeStorage} from './storage.js';import {makeProcessImage} from './imageresult.js';import {makeStoredImages} from './storedimages.js';import {makeImageLib} from './imagelib.js';
 const storage=makeStorage();
 export const storedImages=makeStoredImages({q,storage}); // every upload is recorded so it can be exported, deleted after publish (C.2), aged out and removed with the account
-export const processImage=makeProcessImage({generate:generateImage,storage,track:(uid,url)=>storedImages.recordUrl(uid,url)});
+// Image library (contract 4.1-4.2): resolves referenceImageId to the stored image before generating, stores every result in generated_images and adds imageIds.
+// The library is separate from stored_images: it is not touched by the retention purge above.
+export const imageLib=makeImageLib({q});
+export const processImage = makeProcessImage({
+    generate: generateImage,
+    storage,
+    track: (uid, url) => storedImages.recordUrl(uid, url),
+    lib: imageLib,
+    // NEW: Save the prompt as a caption so the intent brain knows what this image is
+    onComplete: async (userId, jobId, params, imageIds) => {
+      if (!imageIds || !imageIds.length) return;
+      const caption = params.prompt ? params.prompt.slice(0, 500) : 'Generated image';
+      await q(`UPDATE generated_images SET prompt = $1 WHERE id = ANY($2::uuid[]) AND user_id = $3`, [caption, imageIds, userId]);
+    }
+  });
 // A.1: token refresh every 6 h (acts only on tokens with <15 days left) and a 10-minute tick that syncs accounts whose staggered daily slot has passed.
 function startIgJobs(){
  const guard=(n,f)=>()=>f().then(r=>{if(r&&(r.due||r.refreshed||r.reconnect))console.log(n,r)}).catch(e=>console.error(n,e.message));
@@ -56,7 +70,7 @@ export function startWorker(){
  const w=new Worker('scrape',j=>processScrape(j.data).catch(async e=>{await competitors.recordError(j.data.competitorId,e);throw e.code===NOT_PUBLIC_CODE?new UnrecoverableError(e.message):e}),{connection:redis,concurrency:2,limiter:{max:200,duration:3600000}}); // 200 calls/hr
  w.on('failed',(j,e)=>console.error('scrape failed',j?.data?.handle,e.message));
  const wi=new Worker('import',j=>processImport(j.data),{connection:redis,concurrency:2});wi.on('failed',(j,e)=>console.error('import failed',e.message));
- const wg=new Worker('image',j=>processImage(j.data),{connection:redis,concurrency:2});wg.on('failed',(j,e)=>console.error('image failed',e.message));
+ const wg=new Worker('image',j=>processImage({...j.data,jobId:String(j.id)}),{connection:redis,concurrency:2});wg.on('failed',(j,e)=>console.error('image failed',e.message));
  const wk=new Worker('igsync',j=>igSync.syncUser(j.data.userId),{connection:redis,concurrency:1});wk.on('failed',(j,e)=>console.error('igsync failed',e.message)); // A.1b: manual 'Sync now'
  startImageJobs(); // C.1 retention purge
  startCompetitorJobs(); // A.3: daily competitor re-scrape (6-hourly check) + hourly momentum alert

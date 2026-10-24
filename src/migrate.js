@@ -1,4 +1,22 @@
-import './loadenv.js'; // first import: .env must be loaded before db.js / cache.js read their variables
-import {validateEnv} from './config.js';validateEnv({needDb:true});
-import fs from 'node:fs';import {db} from './db.js';
-await db.query(fs.readFileSync(new URL('../db/schema.sql',import.meta.url),'utf8'));console.log('migrated');await db.end();
+import './loadenv.js';
+import { validateEnv } from './config.js';
+validateEnv({ needDb: true });
+import fs from 'node:fs';
+import { db } from './db.js';
+
+const run = async (file) => {
+  const sql = fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+  await db.query(sql);
+};
+
+try {
+  await run('db/schema.sql');
+  await run('db/schema.conversations.sql');
+  await run('db/schema.imagelib.sql');
+  await run('db/schema.albums.sql');
+  console.log('migrated all schemas');
+} catch (e) {
+  console.error('Migration failed:', e.message);
+} finally {
+  await db.end();
+}

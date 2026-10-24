@@ -1,3 +1,6 @@
+import { registerConversationRoutes, withConversation } from './conversations.js';
+import { registerImageLibraryRoutes } from './imagelib.js';
+import { registerAlbumRoutes } from './albums.js';
 import {assistant,financeRoute,pageMetrics} from './assistant.js';import {makeInsights} from './insights.js';import {makeGoals} from './goals.js';import {makeResponses} from './responses.js';import {makeOnboarding} from './onboarding.js';import {makeBrandVoice,currentVoice,captionPrompt,hashtagPrompt} from './brandvoice.js';import {enqueueImage,hasReplicateKey} from './imagejobs.js';import {makeSchedule} from './schedule.js';import {makeNotifications} from './notifications.js';import {igConnect,igSync,dismissals,comments} from './igwire.js';
 import {makeCompetitors} from './competitors.js';
 import {Router} from 'express';import {q} from './db.js';import {requireAuth} from './auth.js';import {scrapeQ,importQ,imageQ} from './queue.js';import {limit,hit} from './ratelimit.js';import {llmConfig,keyFor} from './keys.js';import {parseCsv} from './csv.js';import {MAX_ROWS} from './importer.js';import {encrypt,decrypt} from './crypto.js';import {generateImage} from './images.js';import {makeStorage} from './storage.js';import {makeStoredImages} from './storedimages.js';
@@ -95,7 +98,10 @@ const sch=makeSchedule({q});post('/schedule',sch.create);
 patch('/schedule/:id',sch.update);
 del('/schedule/:id',async(req,res)=>{await q('DELETE FROM scheduled_posts WHERE id=$1 AND user_id=$2',[req.params.id,req.uid]);res.json({ok:true})});
 /* assistant + finance */
-post('/assistant',limit('assistant',30,3600),assistant);get('/finance/plan',financeRoute);
+const convos = registerConversationRoutes({ get, post, patch, del, q, limit });
+registerImageLibraryRoutes({ get, post, patch, del, q, limit });
+registerAlbumRoutes({ get, post, patch, del, q, limit });
+post('/assistant', limit('assistant', 30, 3600), withConversation(convos, assistant));get('/finance/plan',financeRoute);
 /* Phase 1: priorities (1.1), AI context (1.2), marketing breakdown (1.4). Handlers live in insights.js */
 const ins=makeInsights({q,pageMetrics});get('/priorities',ins.priorities);get('/ai/context',ins.aiContext);get('/marketing/breakdown',ins.marketing);get('/goal',makeGoals({q,pageMetrics}).get);const resp=makeResponses({q});post('/responses/save',limit('responses',120,3600),resp.save);get('/responses',resp.list);del('/responses/:id',resp.remove);
 /* Phase 2: per-post analysis (2.2) and notifications (2.3). Handlers live in insights.js / notifications.js */

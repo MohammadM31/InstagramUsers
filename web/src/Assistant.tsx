@@ -1,27 +1,41 @@
-import {useState,useRef,useEffect} from 'react';
+import {useState,useRef,useEffect,useLayoutEffect} from 'react';
 import type {FormEvent} from 'react';
 import {api} from './api';
 import {ICONS} from './icons';
+import {
+  nearBottom,newClientId,messageId,patchMessage,appendMessage,pollPatch,pollDelay,POLL_MAX,
+  fromServerMessage,retryParams,buildAssistantBody,imageIdsOf,RATIOS,
+} from './chat/helpers';
+import type {Msg} from './chat/helpers';
+import {loadThumbs,cachedThumb,rememberThumb} from './chat/thumbs';
+import ImageMessage from './chat/ImageMessage';
+import type {ImageHandlers} from './chat/ImageMessage';
+import HistoryDrawer from './chat/HistoryDrawer';
+import ImagePicker from './chat/ImagePicker';
 
 export type Prefill={id:number;text:string};
+// A parsed "#cc=<conversationId>&ref=<imageId>" (CommandCenter reads the hash, clears it, and hands the result down).
+export type DeepLink={id:number;cc?:string;ref?:string};
 
-type Msg =
-  | { role:'user'; text:string }
-  | { role:'assistant'; type:string; text:string; data?:any; jobId?:string };
+const CONVO_KEY='cc.convo'; // the open conversation, so a reload resumes it (page variant only)
+const sleep=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
 
-function Message({m}:{m:Msg}){
+function Message({m,h}:{m:Msg;h:ImageHandlers}){
   if(m.role==='user') return <div className="chat-msg user"><div className="bubble">{m.text}</div></div>;
+  if(m.type==='image') return <div className="chat-msg assistant">
+    <div className="avatar"><span>AI</span></div>
+    <div className="bubble img-bubble"><ImageMessage m={m} h={h}/></div>
+  </div>;
   const d=m.data||{};
   let body;
-  if(m.type==='image'&&d.url) body = <><img src={d.url} alt="Generated"/><div className="row"><span className="mu">{m.text}</span><a className="btn s" href={d.url} download="post.png">Save</a></div></>;
-  else if(m.type==='analytics') body = <>
+  if(m.type==='analytics'&&d.health&&d.metrics) body = <>
     <div className="ring"><i>{d.health.score}</i></div><p style={{textAlign:'center'}}><b>{m.text}</b></p>
-    <div className="row"><span>Reach 30d <b>{d.metrics.reach30d.toLocaleString()}</b></span><span>Engagement <b>{d.metrics.er}%</b></span><span>Reach change <b>{d.metrics.reachChange}%</b></span></div>
-    {d.top?.map((t:any,i:number)=><p key={i}>• {t.text}</p>)}</>;
-  else if(m.type==='finance') body = <><span className="tag">${d.capital.toLocaleString()} suggested split</span>
-    {d.money?.map((x:any)=><div key={x.area}><div className="row" style={{margin:0}}><span>{x.area}</span><b>${x.amount}</b></div><div className="bar"><div style={{width:x.share+'%'}}/></div></div>)}
-    {d.time?.map((t:string,i:number)=><p key={i}>{t}</p>)}</>;
-  else body = <><p style={{margin:0}}>{m.text}</p>{d.more?.map((t:any,i:number)=><p key={i} className="mu">{t.text}</p>)}</>;
+    <div className="row"><span>Reach 30d <b>{Number(d.metrics.reach30d||0).toLocaleString()}</b></span><span>Engagement <b>{d.metrics.er}%</b></span><span>Reach change <b>{d.metrics.reachChange}%</b></span></div>
+    {d.top?.map((t:any,i:number)=><p key={m.id+':t'+i}>• {t.text}</p>)}</>;
+  else if(m.type==='finance'&&d.capital!==undefined) body = <><span className="tag">${Number(d.capital).toLocaleString()} suggested split</span>
+    {d.money?.map((x:any)=><div key={m.id+':'+x.area}><div className="row" style={{margin:0}}><span>{x.area}</span><b>${x.amount}</b></div><div className="bar"><div style={{width:x.share+'%'}}/></div></div>)}
+    {d.time?.map((t:string,i:number)=><p key={m.id+':s'+i}>{t}</p>)}</>;
+  else body = <><p style={{margin:0}}>{m.text}</p>{d.more?.map((t:any,i:number)=><p key={m.id+':m'+i} className="mu">{t.text}</p>)}</>;
   return <div className="chat-msg assistant">
     <div className="avatar"><span>AI</span></div>
     <div className="bubble">{body}</div>
@@ -32,15 +46,28 @@ export default function Assistant({
   isEmbedded = false,
   variant = 'float',
   prefill = null,
+  deepLink = null,
   onInteract,
+  onReset,
 }:{
   isEmbedded?: boolean;
   variant?: 'float' | 'page';
   prefill?: Prefill | null;
+  deepLink?: DeepLink | null;
   onInteract?: () => void;
+  onReset?: () => void;
 }){
-  const [m,setM]=useState(''), [msgs,setMsgs]=useState<Msg[]>([]), [b,setB]=useState(false), [ref,setRef]=useState(''),
-    f=useRef<HTMLInputElement>(null), seq=useRef(0);
+  const [m,setM]=useState(''), [msgs,setMsgs]=useState<Msg[]>([]), [b,setB]=useState(false), [typing,setTyping]=useState(false),
+    f=useRef<HTMLInputElement>(null), inputRef=useRef<HTMLInputElement>(null);
+  const [refImg,setRefImg]=useState<{id:string;thumb?:string}|null>(null); // the reference chip on the composer
+  const [up,setUp]=useState(false);
+  const [overlay,setOverlay]=useState('');
+  const [notice,setNotice]=useState('');
+  const [convoId,setConvoId]=useState<string|null>(null);
+  const [title,setTitle]=useState('');
+  const [histOpen,setHistOpen]=useState(false);
+  const [pickOpen,setPickOpen]=useState(false);
+  const [showJump,setShowJump]=useState(false);
   const [mode,setMode]=useState<'chat'|'image'>('chat');
   const [imgRatio,setImgRatio]=useState('1:1');
   const [hidden,setHidden]=useState(false);
@@ -50,6 +77,7 @@ export default function Assistant({
   const [edge,setEdge]=useState<null|'left'|'right'|'top'|'bottom'>(null);
   const cardRef=useRef<HTMLDivElement>(null);
   const threadRef=useRef<HTMLDivElement>(null);
+  const innerRef=useRef<HTMLDivElement>(null);
 
   // Drag state kept in refs so pointermove never triggers a React render.
   const dragState=useRef<{ox:number;oy:number;x:number;y:number}|null>(null);
@@ -58,8 +86,18 @@ export default function Assistant({
 
   const isPage = variant === 'page';
 
+  // Chat state that async code (polls, saves) needs to read without stale closures.
+  const msgsRef=useRef<Msg[]>([]); msgsRef.current=msgs;
+  const convoRef=useRef<string|null>(null);
+  const epoch=useRef(0);          // bumps when the visible conversation changes; late replies and polls for the old one stop
+  const alive=useRef(true);
+  const polling=useRef<Set<string>>(new Set());
+  const stick=useRef(true);       // follow new content only while the reader is near the bottom
+  const deepRef=useRef<DeepLink|null>(deepLink); deepRef.current=deepLink;
+
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
   useEffect(()=>{if(prefill){setM(prefill.text);onInteract?.()}},[prefill]); // eslint-disable-line
-  useEffect(()=>{if(threadRef.current)threadRef.current.scrollTop=threadRef.current.scrollHeight},[msgs]);
+  useEffect(()=>{if(msgs.length>0)onInteract?.()},[msgs.length>0]); // eslint-disable-line
   // Safety net: Escape restores the hidden composer.
   useEffect(()=>{
     const onKey=(e:KeyboardEvent)=>{ if(e.key==='Escape' && hidden){ setHidden(false); setDocked(null); } };
@@ -67,52 +105,179 @@ export default function Assistant({
     return ()=>removeEventListener('keydown', onKey);
   },[hidden]);
 
-  const pick=(e:any)=>{const x=e.target.files?.[0];if(!x)return;const fr=new FileReader();fr.onload=()=>setRef(String(fr.result));fr.readAsDataURL(x)};
-  const push=(msg:Msg)=>setMsgs(list=>[...list,msg]);
+  // ---- scrolling: the thread is its own scroller, bottom-anchored; it follows only while the reader is near the bottom ----
+  const scrollBottom=()=>{const el=threadRef.current;if(el)el.scrollTop=el.scrollHeight};
+  useLayoutEffect(()=>{if(stick.current)scrollBottom()},[msgs,typing]);
+  const threadKey=`${msgs.length>0}|${detached}|${hidden}|${docked}`;
+  useEffect(()=>{ // images loading and polls resizing a message also keep the bottom in view
+    const inner=innerRef.current;
+    if(!inner||typeof ResizeObserver==='undefined')return;
+    const ro=new ResizeObserver(()=>{if(stick.current)scrollBottom()});
+    ro.observe(inner);
+    return()=>ro.disconnect();
+  },[threadKey]);
+  const onScroll=()=>{const near=nearBottom(threadRef.current);stick.current=near;setShowJump(!near)};
+  const jump=()=>{stick.current=true;setShowJump(false);scrollBottom()};
 
-  const send=async(e:FormEvent)=>{
-    e.preventDefault();
-    if(!m.trim()||b)return;
-    onInteract?.();
-    setB(true);
-    const id=++seq.current;
-    const userText=m;
-    push({role:'user',text:userText});
-    setM('');
+  // ---- conversation id ----
+  const setConvo=(id:string|null)=>{
+    convoRef.current=id;setConvoId(id);
+    if(isPage){try{id?localStorage.setItem(CONVO_KEY,id):localStorage.removeItem(CONVO_KEY)}catch{}}
+  };
+
+  // ---- image polling: every pending image polls on its own, keyed by its message id ----
+  const pollImage=async(msgId:string,jobId:string,ep:number)=>{
+    const key=ep+':'+msgId;
+    if(polling.current.has(key))return;
+    polling.current.add(key);
+    const t0=Date.now();let errs=0;
+    const stale=()=>!alive.current||ep!==epoch.current;
     try{
-      if(mode==='image'){
-        const x = await api<any>('/content/image',{method:'POST',body:{prompt:userText, ratio:imgRatio, referenceImage:ref||undefined}});
-        if (x.jobId) await poll(x.jobId, id);
-      } else {
-        const x=await api<any>('/assistant',{method:'POST',body:{message:userText,referenceImage:ref||undefined}});
-        push({role:'assistant',type:x.type||'info',text:x.text||'',data:x.data});
-        if(x.type==='image'&&x.data?.jobId) await poll(x.data.jobId, id);
+      for(let i=0;i<POLL_MAX;i++){
+        await sleep(pollDelay(i));
+        if(stale())return;
+        try{
+          const s=await api<any>('/content/image/'+encodeURIComponent(jobId));
+          errs=0;
+          if(stale())return;
+          const r=pollPatch(s,Math.round((Date.now()-t0)/1000));
+          setMsgs(l=>patchMessage(l,msgId,r.patch)); // updates THIS message only
+          if(r.done)return;
+        }catch{
+          if(++errs>=5){setMsgs(l=>patchMessage(l,msgId,{data:{status:'failed',error:'Could not check on this image. Try again.'}}));return}
+        }
       }
-    }catch(err:any){push({role:'assistant',type:'info',text:err.message})}
-    setB(false);setRef('');
+      if(!stale())setMsgs(l=>patchMessage(l,msgId,{data:{status:'failed',error:'Still generating after a few minutes. Try again.'}}));
+    }finally{polling.current.delete(key)}
   };
 
-  const poll=async(jobId:string,id:number)=>{
-    for(let i=1;i<=30;i++){
-      await new Promise(r=>setTimeout(r,2000));
-      if(id!==seq.current)return;
-      const s=await api<any>('/content/image/'+jobId);
-      if(s.status==='done'){push({role:'assistant',type:'image',text:'Here you go.',data:{url:s.images[0]}});return}
-      if(s.status==='failed'){push({role:'assistant',type:'info',text:'Image generation failed: '+(s.error||'try again')});return}
-      setMsgs(list=>{
-        const copy=[...list];
-        for(let k=copy.length-1;k>=0;k--){
-          const c=copy[k] as any;
-          if(c.role==='assistant'){copy[k]={...c,type:'image',text:'Generating your image… '+i*2+'s',data:{jobId}};break}
-        }
-        return copy;
-      });
+  // ---- opening / resetting a conversation ----
+  const openConversation=async(id:string,quiet=false)=>{
+    const ep=++epoch.current;
+    setHistOpen(false);setNotice('');
+    try{
+      const x=await api<any>('/conversations/'+encodeURIComponent(id));
+      if(ep!==epoch.current||!alive.current)return;
+      const list:Msg[]=(Array.isArray(x.messages)?x.messages:[]).map(fromServerMessage);
+      stick.current=true;setShowJump(false);
+      setMsgs(list);setConvo(String(x.id||id));setTitle(String(x.title||''));
+      list.forEach(mm=>{if(mm.type==='image'&&mm.data?.status==='pending'&&mm.data?.jobId)pollImage(mm.id,mm.data.jobId,ep)}); // pending images resolve
+    }catch(err:any){
+      if(ep!==epoch.current||!alive.current)return;
+      if(id===convoRef.current||quiet){setConvo(null)} // the remembered chat is gone: forget it
+      if(!quiet)setNotice(err?.message||'Could not open that chat.');
     }
-    push({role:'assistant',type:'info',text:'Still generating after 60s. Try again in a moment.'});
   };
+  const newChat=()=>{
+    epoch.current++;
+    setMsgs([]);setConvo(null);setTitle('');setRefImg(null);setNotice('');setHistOpen(false);setM('');setShowJump(false);
+    stick.current=true;
+    onReset?.();
+  };
+  const clearThread=newChat;
+
+  // Reload resumes the open conversation (a deep link, applied below, wins over it).
+  useEffect(()=>{
+    if(!isPage||deepRef.current?.cc)return;
+    let id:string|null=null;try{id=localStorage.getItem(CONVO_KEY)}catch{}
+    if(id)openConversation(id,true);
+  },[]); // eslint-disable-line
+
+  // ---- reference image ----
+  const attachRef=(id:string,thumb?:string)=>{setRefImg({id,thumb:thumb||cachedThumb(id)});setNotice('');inputRef.current?.focus()};
+  const cont=(id:string,ratio?:string,thumb?:string)=>{ // "Continue editing": reference + image mode + the same ratio
+    attachRef(id,thumb);setMode('image');
+    if(ratio&&RATIOS.includes(ratio))setImgRatio(ratio);
+  };
+  useEffect(()=>{ // a chip without a thumbnail yet (deep link) fetches it through the batched library call
+    if(!refImg||refImg.thumb)return;
+    const id=refImg.id;
+    loadThumbs([id]).then(()=>setRefImg(r=>r&&r.id===id?{...r,thumb:cachedThumb(id)||''}:r));
+  },[refImg?.id,refImg?.thumb]); // eslint-disable-line
+
+  // Deep link from the hash: open that conversation and/or pre-select the reference image.
+  useEffect(()=>{
+    if(!deepLink)return;
+    if(deepLink.cc&&deepLink.cc!==convoRef.current)openConversation(deepLink.cc);
+    if(deepLink.ref)cont(deepLink.ref);
+  },[deepLink?.id]); // eslint-disable-line
+
+  // Legacy file upload: now goes through the library (POST /api/images/upload) and the chip carries the new image id.
+  const pick=async(e:any)=>{
+    const x=e.target.files?.[0];e.target.value='';
+    if(!x)return;
+    if(!/^image\/(png|jpe?g|webp)$/.test(x.type)){setNotice('Use a PNG, JPEG or WebP image.');return}
+    if(x.size>6*1024*1024){setNotice('That image is over 6 MB.');return}
+    setUp(true);setNotice('');
+    try{
+      const dataUrl=await new Promise<string>((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result));fr.onerror=()=>rej(new Error('Could not read that file'));fr.readAsDataURL(x)});
+      const u=await api<any>('/images/upload',{method:'POST',body:{dataUrl}});
+      rememberThumb(u.id,u.thumb);setRefImg({id:u.id,thumb:u.thumb});
+    }catch(err:any){setNotice(err?.message||'Upload failed')}
+    setUp(false);
+  };
+
+  // ---- sending ----
+  type Req={text:string;image:boolean;ratio:string;referenceImageId?:string;overlayText?:string;showUser:boolean};
+  const submit=async(o:Req)=>{
+    onInteract?.();setNotice('');setB(true);stick.current=true;
+    const ep=epoch.current;
+    const phId=newClientId();
+    if(o.showUser)setMsgs(l=>appendMessage(l,{id:newClientId(),role:'user',type:'info',text:o.text}));
+    // An image request appends its OWN placeholder; nothing already in the thread is touched.
+    if(o.image)setMsgs(l=>appendMessage(l,{id:phId,role:'assistant',type:'image',text:'',data:{status:'pending',imageIds:[],ratio:o.ratio,referenceImageId:o.referenceImageId,overlayText:o.overlayText,summary:'Sending your request…'}}));
+    else setTyping(true);
+    try{
+      const x=await api<any>('/assistant',{method:'POST',body:buildAssistantBody({text:o.text,conversationId:convoRef.current,image:o.image,ratio:o.ratio,referenceImageId:o.referenceImageId,overlayText:o.overlayText})});
+      if(ep!==epoch.current||!alive.current)return; // the person moved to another chat meanwhile
+      if(x.conversationId)setConvo(String(x.conversationId));
+      const d=x.data&&typeof x.data==='object'?x.data:{};
+      const isImg=x.type==='image'&&!!d.jobId;
+      const serverId=x.messageId!==undefined&&x.messageId!==null?String(x.messageId):undefined;
+      const reply={type:String(x.type||'info'),text:String(x.text||''),serverId,data:isImg?{...d,status:'pending',imageIds:[]}:d};
+      const aid=o.image?phId:messageId(serverId);
+      if(o.image)setMsgs(l=>patchMessage(l,phId,reply));
+      else setMsgs(l=>appendMessage(l,{id:aid,role:'assistant',...reply}));
+      if(isImg)pollImage(aid,d.jobId,ep);
+    }catch(err:any){
+      if(ep!==epoch.current||!alive.current)return;
+      const text=err?.message||'Something went wrong';
+      if(o.image)setMsgs(l=>patchMessage(l,phId,{data:{status:'failed',error:text}}));
+      else setMsgs(l=>appendMessage(l,{id:newClientId(),role:'assistant',type:'info',text}));
+      if(o.referenceImageId)setRefImg(r=>r||{id:o.referenceImageId!,thumb:cachedThumb(o.referenceImageId!)});
+    }finally{setB(false);setTyping(false)}
+  };
+  const send=(e:FormEvent)=>{
+    e.preventDefault();
+    if(!m.trim()||b||up)return;
+    const image=mode==='image';
+    const o:Req={text:m.trim(),image,ratio:imgRatio,referenceImageId:refImg?.id,overlayText:image?overlay.trim():'',showUser:true};
+    setM('');setRefImg(null);setOverlay('');
+    submit(o);
+  };
+  const retry=(id:string)=>{
+    if(b)return;
+    const p=retryParams(msgsRef.current,id);
+    if(!p)return;
+    submit({text:p.text,image:true,ratio:p.ratio||imgRatio,referenceImageId:p.referenceImageId,overlayText:p.overlayText,showUser:false}); // a NEW placeholder; the failed one stays as it was
+  };
+
+  // ---- save to album: POST /api/albums/items. 201 (created) and 200 existing:true both mean it is saved. ----
+  const save=async(id:string)=>{
+    const mm=msgsRef.current.find(x=>x.id===id);
+    const ids=imageIdsOf(mm);
+    if(!mm||!ids.length||mm.data?.saved===true||mm.data?.saved==='saving')return;
+    setMsgs(l=>patchMessage(l,id,{data:{saved:'saving',saveError:undefined}}));
+    try{
+      await api('/albums/items',{method:'POST',body:{imageIds:ids,ratio:mm.data?.ratio||undefined,conversationId:convoRef.current||undefined}});
+      setMsgs(l=>patchMessage(l,id,{data:{saved:true}}));
+    }catch(err:any){setMsgs(l=>patchMessage(l,id,{data:{saved:false,saveError:err?.message||'Could not save'}}))}
+  };
+
+  const handlers:ImageHandlers={attachRef,cont,save,retry,layout:()=>{if(stick.current)scrollBottom()}};
+
 
   const go=(t:string)=>{setM(t);onInteract?.()};
-  const clearThread=()=>setMsgs([]);
 
   const onPointerDown=(e:React.PointerEvent<HTMLDivElement>)=>{
     if(isEmbedded||isPage)return;
@@ -181,15 +346,22 @@ export default function Assistant({
   // Pass `floating` to include the down-arrow hide button (used by the floating composer only).
   const composerForm = (floating=false) => (
     <div className={isPage ? 'assistant-bar-wrap page-bar' : 'assistant-bar-wrap'}>
+      {notice && <div className="chat-note" role="alert">{notice}</div>}
+      {refImg && <div className="ref-chip">
+        {refImg.thumb ? <img src={refImg.thumb} alt=""/> : <span className="ref-ph sk"/>}
+        <span>Reference image</span>
+        <button type="button" className="ref-x" onClick={()=>setRefImg(null)} aria-label="Remove reference image" title="Remove reference image">×</button>
+      </div>}
       <form onSubmit={send} className="chat-form">
-        <input ref={f} type="file" accept="image/*" hidden onChange={pick}/>
-        <button type="button" className={ref?'on':''} onClick={()=>f.current?.click()} title="Attach image">{ICONS.clip}</button>
+        <input ref={f} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={pick}/>
+        <button type="button" className={refImg?'on':''} disabled={up} onClick={()=>f.current?.click()} title="Upload an image to use as the reference" aria-label="Upload a reference image">{up?'…':ICONS.clip}</button>
+        <button type="button" onClick={()=>setPickOpen(true)} title="Pick a reference from your images" aria-label="Pick a reference from your images">{ICONS.content}</button>
 
-        <input value={m} onChange={e=>setM(e.target.value)}
-          placeholder={mode==='image' ? "Describe the image to generate..." : "Ask for analytics, an image, ideas, a budget…"}/>
+        <input ref={inputRef} value={m} onChange={e=>setM(e.target.value)}
+          placeholder={mode==='image' ? (refImg ? "Say what to change in the reference image..." : "Describe the image to generate...") : "Ask for analytics, an image, ideas, a budget…"}/>
 
         {mode==='image' && (
-          <select value={imgRatio} onChange={e=>setImgRatio(e.target.value)} className="ratio-select">
+          <select value={imgRatio} onChange={e=>setImgRatio(e.target.value)} className="ratio-select" aria-label="Image ratio">
             <option value="1:1">1:1</option>
             <option value="4:5">4:5</option>
             <option value="9:16">9:16</option>
@@ -217,25 +389,54 @@ export default function Assistant({
           </button>
         )}
 
-        <button type="submit" id="assistant-send" disabled={b||!m.trim()}>{b?'…':'Send'}</button>
+        <button type="submit" id="assistant-send" disabled={b||up||!m.trim()}>{b?'…':'Send'}</button>
       </form>
+      {mode==='image' && <div className="overlay-row">
+        <input value={overlay} maxLength={120} onChange={e=>setOverlay(e.target.value)} placeholder="Text on the image (optional)" aria-label="Text on the image"/>
+      </div>}
     </div>
   );
 
   const thread = (
-    <div className={isPage ? 'chat-thread page-thread' : 'chat-thread'} ref={threadRef}>
-      {msgs.map((msg,i)=><Message key={i} m={msg}/>)}
-      {b && <div className="chat-msg assistant"><div className="avatar"><span>AI</span></div><div className="bubble typing"><i/><i/><i/></div></div>}
+    <div className="thread-wrap">
+      <div className={isPage ? 'chat-thread page-thread' : 'chat-thread'} ref={threadRef} onScroll={onScroll} role="log" aria-live="polite">
+        <div className="thread-inner" ref={innerRef}>
+          {msgs.map(msg=><Message key={msg.id} m={msg} h={handlers}/>)}
+          {typing && <div className="chat-msg assistant"><div className="avatar"><span>AI</span></div><div className="bubble typing"><i/><i/><i/></div></div>}
+        </div>
+      </div>
+      {showJump && <button type="button" className="jump-latest" onClick={jump}>↓ Jump to latest</button>}
     </div>
   );
+
+  const toolbar = isPage && (
+    <div className="chat-toolbar">
+      <button type="button" className="chat-tool" onClick={()=>setHistOpen(true)} title="Chat history">{ICONS.Scheduling}<span>History</span></button>
+      <button type="button" className="chat-tool" onClick={newChat} title="Start a new chat">{ICONS.start}<span>New chat</span></button>
+      {title && <span className="chat-title mu" title={title}>{title}</span>}
+    </div>
+  );
+
+  // Picker (both variants) and history drawer (page variant): fixed overlays, so they never move the layout.
+  const overlays = <>
+    {pickOpen && <ImagePicker onClose={()=>setPickOpen(false)} onPick={img=>{rememberThumb(img.id,img.thumb);attachRef(img.id,img.thumb);setPickOpen(false)}}/>}
+    {isPage && histOpen && <HistoryDrawer currentId={convoId}
+      onClose={()=>setHistOpen(false)}
+      onNew={newChat}
+      onOpen={id=>{setRefImg(null);if(id===convoRef.current)setHistOpen(false);else openConversation(id)}}
+      onDeleted={id=>{if(id===convoRef.current)newChat()}}
+      onRenamed={(id,t)=>{if(id===convoRef.current)setTitle(t)}}/>}
+  </>;
 
   // ---- PAGE VARIANT (Command Center) ----
   if (isPage) {
     return (
       <div className="assistant-page">
+        {toolbar}
         {showSuggestions && suggestionsRow}
         {msgs.length > 0 && thread}
         {composerForm()}
+        {overlays}
       </div>
     );
   }
@@ -333,5 +534,6 @@ export default function Assistant({
       {showSuggestions && suggestionsRow}
       {composerForm(true)}
     </div>
+    {overlays}
   </>;
 }

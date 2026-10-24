@@ -134,7 +134,7 @@ test('C.1 wiring: schema, GDPR export, account delete, worker job, config', () =
   assert.match(ro, /o\.stored_images=await q\('SELECT \* FROM stored_images WHERE user_id=\$1 ORDER BY id',\[req\.uid\]\)/, 'GDPR export lists stored_images');
   const del = ro.slice(ro.indexOf("del('/gdpr/account'")); assert.ok(del.indexOf('storedImages.purgeUser(req.uid)') > 0 && del.indexOf('storedImages.purgeUser(req.uid)') < del.indexOf("DELETE FROM users WHERE id=$1"), 'objects are purged before the user row is deleted');
   assert.match(w, /setInterval\(guard\('imagePurge',\(\)=>storedImages\.purgeDue\(\)\),36e5\)/); assert.match(w, /startImageJobs\(\);/);
-  assert.match(w, /makeProcessImage\(\{generate:generateImage,storage,track:\(uid,url\)=>storedImages\.recordUrl\(uid,url\)\}\)/);
+  assert.match(w, /makeProcessImage\(\{generate:generateImage,storage,track:\(uid,url\)=>storedImages\.recordUrl\(uid,url\),lib:imageLib\}\)/);
 });
 
 test('A.3 last_error: safe messages by failure type; never the raw error text', () => {
