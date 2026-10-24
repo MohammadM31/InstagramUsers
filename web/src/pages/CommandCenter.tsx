@@ -1,11 +1,12 @@
 // The default landing page: centered layout with a dynamic greeting, floating report trigger, and an embedded conversation.
-import {useState} from 'react';
+import {useState,useEffect} from 'react';
 import {useQ} from '../api';
 import Assistant from '../Assistant';
-import type {Prefill} from '../Assistant';
+import type {Prefill,DeepLink} from '../Assistant';
 import type {IgStatus} from '../ig';
 import {briefing, connectionView} from '../cc';
 import type {Tip} from '../cc';
+import {parseHash} from '../chat/helpers';
 
 export default function CommandCenter(){
   const dash = useQ<any>('/dashboard');
@@ -15,6 +16,7 @@ export default function CommandCenter(){
   const ig = useQ<IgStatus>('/instagram/status');
 
   const [prefill, setPrefill] = useState<Prefill|null>(null);
+  const [deepLink, setDeepLink] = useState<DeepLink|null>(null);
   const [interacted, setInteracted] = useState(false);
 
   const name = (prof.d?.display_name || '').trim();
@@ -22,14 +24,32 @@ export default function CommandCenter(){
   const b = briefing({ name, dash: dash.d, ctx: ctx.d, focus: tips[0]?.text });
   const conn = connectionView(ig.e ? null : ig.d);
 
+  // Deep links: "#cc=<conversationId>&ref=<imageId>". Read on mount, on hashchange and on the window "nav" event;
+  // apply it (hand it to the chat), then clear it with history.replaceState so a reload does not replay it.
+  // Other hashes (#settings, #albums) are not ours: parseHash gives null and they are left alone for App.tsx.
+  useEffect(() => {
+    const read = () => {
+      const link = parseHash(location.hash);
+      if (!link) return;
+      setInteracted(true);
+      setDeepLink({ id: Date.now(), ...link });
+      history.replaceState(null, '', location.pathname + location.search);
+    };
+    read();
+    addEventListener('hashchange', read);
+    addEventListener('nav', read);
+    return () => { removeEventListener('hashchange', read); removeEventListener('nav', read); };
+  }, []);
+
   const triggerReport = () => {
     setInteracted(true);
     setPrefill({ id: Date.now(), text: "Generate my daily report. Give me a summary of my account health, my top priorities right now, and what I should focus on today." });
   };
 
+  // The connection pill: set the hash first, then dispatch "nav" (App.tsx listens to both and switches to Settings).
   const goSettings = () => {
-    dispatchEvent(new Event('nav'));
     if (location.hash !== '#settings') location.hash = '#settings';
+    dispatchEvent(new Event('nav'));
   };
 
   return (
@@ -58,7 +78,7 @@ export default function CommandCenter(){
               </button>
             </div>
           )}
-          <Assistant variant="page" prefill={prefill} onInteract={()=>setInteracted(true)}/>
+          <Assistant variant="page" prefill={prefill} deepLink={deepLink} onInteract={()=>setInteracted(true)} onReset={()=>setInteracted(false)}/>
         </div>
       </div>
     </div>
