@@ -1,4 +1,4 @@
-import {useState,useEffect} from 'react';
+import {useState,useEffect,lazy,Suspense} from 'react';
 import type {ComponentType} from 'react';
 import {tok,api} from './api';
 import Login from './pages/Login';
@@ -20,6 +20,10 @@ import type {IconName} from './icons';
 import {IgBadge} from './pages/InstagramCard';
 import {parseIgRedirect} from './ig';
 import {pageFromHash,hashAfterNav,isEmptyHash} from './albums/hash';
+import {useMe} from './admin/useCan';
+import {isStaffMe,isAdminPath} from './admin/pure';
+
+const AdminShell = lazy(()=>import('./admin/AdminShell'));
 
 const IGR = parseIgRedirect();
 
@@ -60,7 +64,6 @@ const MORE:NavItem[] = [
 
 export default function App(){
   const [t,setT] = useState(tok());
-  // The first page comes from the hash (#albums, #settings, #cc=...), unless we just came back from the Instagram OAuth redirect.
   const [p,setP] = useState<string>(IGR ? 'Settings' : (pageFromHash(location.hash) ?? 'Dashboard'));
   const [igMsg,setIgMsg] = useState(IGR);
   const [navOpen, setNavOpen] = useState(true);
@@ -68,15 +71,14 @@ export default function App(){
   const [name,setName] = useState('');
   const [dk,setDk] = useState(()=>localStorage.getItem('theme') ? localStorage.getItem('theme')==='dark' : matchMedia('(prefers-color-scheme:dark)').matches);
   const notif = useNotifications(!!t&&ob==='ok');
+  const {me} = useMe(t);
+  const [adminMode,setAdminMode] = useState(()=>isAdminPath(location.pathname));
 
   useEffect(()=>{document.documentElement.dataset.theme = dk ? 'dark' : 'light';localStorage.setItem('theme', dk ? 'dark' : 'light')},[dk]);
   useEffect(()=>{if(IGR)history.replaceState(null,'',location.pathname)},[]);
   useEffect(()=>{localStorage.setItem('nav', navOpen?'open':'closed')},[navOpen]);
+  useEffect(()=>{const f=()=>setAdminMode(isAdminPath(location.pathname));addEventListener('popstate',f);return()=>removeEventListener('popstate',f)},[]);
 
-  // Hash router (contract 4.7). Any change of the hash, and the `nav` event other pages dispatch (the Command Center's connection pill,
-  // Albums' "Continue editing"), re-reads location.hash. Unknown hashes leave the page alone. An EMPTY hash means the Command Center when it
-  // arrives through hashchange (Back from #albums); a bare `nav` event with an empty hash changes nothing, so it can never yank you off a page.
-  // The `#cc=...` part is NOT cleared here: the Command Center reads it, applies it and clears it itself.
   useEffect(()=>{
     const read=(fromNav:boolean)=>{
       const h=location.hash,pg=pageFromHash(h);
@@ -89,7 +91,6 @@ export default function App(){
     return()=>{window.removeEventListener('hashchange',onHash);window.removeEventListener('nav',onNav)};
   },[]);
 
-  // O.1: new accounts see the setup wizard first.
   useEffect(()=>{
     if(!t){setOb('loading');return}
     let live=true;
@@ -97,7 +98,6 @@ export default function App(){
     return()=>{live=false}
   },[t]);
 
-  // The sidebar's profile row shows the display name from the profile.
   useEffect(()=>{
     if(!t||ob!=='ok')return;
     let live=true;
@@ -109,8 +109,8 @@ export default function App(){
   if(ob==='loading') return <div className="st" style={{margin:24}}>Loading…</div>;
   if(ob==='needed') return <Onboarding igMsg={igMsg} onDone={()=>setOb('ok')}/>;
 
-  // go(): switch page from a click. It also keeps the address bar in step (#albums / #settings / none) with replaceState,
-  // which fires no hashchange, so there is no loop. A pending #cc=... is left for the Command Center to consume.
+  if(adminMode) return <Suspense fallback={<div className="st" style={{margin:24}}>Loading…</div>}><AdminShell onExit={()=>{history.pushState(null,'','/'+location.search);setAdminMode(false)}}/></Suspense>;
+
   const go=(page:string)=>{
     setP(page);
     const h=hashAfterNav(page,location.hash);
@@ -133,6 +133,7 @@ export default function App(){
         {item({label:'Settings',page:'Settings',icon:'settings'})}
         <button className="navb prof" aria-current={p==='Settings'?'page':undefined} onClick={()=>go('Settings')}>
           <span className="rg"><i>{name?name[0].toUpperCase():<Icon name="user" size={20}/>}</i></span>{name||'Profile'}</button>
+        {isStaffMe(me)&&<button className="navb sm" onClick={()=>{history.pushState(null,'','/admin');setAdminMode(true)}}><Icon name="settings" size={20}/>Admin</button>}
         <button className="navb out" onClick={logout}><Icon name="logout"/>Logout</button>
       </div>
     </aside>

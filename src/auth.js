@@ -1,7 +1,6 @@
-import bcrypt from 'bcryptjs';import jwt from 'jsonwebtoken';import {Router} from 'express';import {q} from './db.js';import {loginLocked,loginFailed,loginOk} from './ratelimit.js';
-const S=()=>{const s=process.env.JWT_SECRET;if(!s||s.length<32)throw new Error('JWT_SECRET missing or shorter than 32 chars');return s}; // no fallback: validated at boot by config.js
-export const sign=u=>jwt.sign({sub:u.id},S(),{expiresIn:'7d'});
-export function requireAuth(req,res,next){try{req.uid=jwt.verify((req.headers.authorization||'').replace('Bearer ',''),S()).sub;next()}catch{res.status(401).json({error:'unauthorized'})}}
+import bcrypt from 'bcryptjs';import {Router} from 'express';import {q} from './db.js';import {loginLocked,loginFailed,loginOk} from './ratelimit.js';import {signToken} from './rbac/token.js';import {requireAuth} from './rbac/middleware.js';import {loginBlock} from './rbac/loginPolicy.js';
+export const sign=signToken; // R.0: the token also carries tv (token_version)
+export {requireAuth}; // R.0: loads the user row on every request (src/rbac/middleware.js); routes.js still imports it from here
 export const auth=Router();
 const wrap=f=>(req,res,next)=>Promise.resolve(f(req,res,next)).catch(next);
 auth.post('/register',wrap(async(req,res)=>{const{email,password,acceptTos}=req.body||{};
@@ -14,4 +13,6 @@ auth.post('/login',wrap(async(req,res)=>{const{email,password}=req.body||{};
  if(lock){res.set('Retry-After',String(lock));return res.status(429).json({error:`Too many failed logins. Try again in ${Math.ceil(lock/60)} min.`})}
  const[u]=await q('SELECT * FROM users WHERE email=$1',[e]);
  if(!u||!await bcrypt.compare(password,u.pass_hash)){await loginFailed(e,req.ip);return res.status(401).json({error:'invalid credentials'})}
- await loginOk(e,req.ip);res.json({token:sign(u)})}));
+ await loginOk(e,req.ip);
+ const blocked=loginBlock(u);if(blocked)return res.status(blocked.status).json({error:blocked.error}); // R.0: suspended accounts cannot log in
+ await q('UPDATE users SET last_active_at=now() WHERE id=$1',[u.id]);res.json({token:sign(u)})}));
