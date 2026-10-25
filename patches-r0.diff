@@ -1,0 +1,1258 @@
+diff --git a/.env.example b/.env.example
+index 36112d0..d5af4f0 100644
+--- a/.env.example
++++ b/.env.example
+@@ -49,3 +49,6 @@ S3_SECRET_ACCESS_KEY=
+ S3_PUBLIC_BASE_URL=
+ # Stored images older than this many days are deleted from the bucket by an hourly job (1-365, default 30). Images of deleted accounts are removed at once.
+ IMAGE_RETENTION_DAYS=
++# --- Platform owner (R.0). Sign up in the app first with this email, set OWNER_EMAIL to it, then restart the server: that account becomes the owner
++# and can open /admin. Nobody else can become staff by any request. Leave empty and nobody can open /admin (the server warns at every start). ---
++OWNER_EMAIL=
+diff --git a/README.md b/README.md
+index 5cef840..f2057bf 100644
+--- a/README.md
++++ b/README.md
+@@ -10,6 +10,17 @@ The API **exits at boot** with a clear message if these are missing or malformed
+ 
+     node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"    # run twice: JWT_SECRET and ENCRYPTION_KEY
+ 
++## Platform roles and the owner account (R.0)
++Every user has a platform role: `user` (a normal customer), `support`, `admin` or `owner`. Staff open the admin area at `/admin` (the "Admin" entry appears at the bottom of the sidebar only for staff). **Nobody can sign up as staff.** The first owner is created like this:
++
++1. Sign up normally in the app with the email address you will use as owner.
++2. In `.env`, set `OWNER_EMAIL=` to exactly that email address.
++3. Restart the server. It logs `OWNER_EMAIL: ... is now the platform owner`. Restarting again changes nothing.
++
++If `OWNER_EMAIL` is empty the server logs a warning at every start and nobody can open `/admin`. If it is set but nobody has signed up with that email yet, the server logs that too and does nothing; sign up, then restart.
++
++`npm run migrate` now also applies `db/schema.rbac.sql` (and any other `db/schema.<name>.sql`). `npm run check:admin` fails if any admin route lacks a permission check. The `curl.exe` commands for these routes are in `docs/RBAC_R0.md`.
++
+ ## Run with Docker
+     cp .env.example .env     # set JWT_SECRET and ENCRYPTION_KEY
+     docker compose up --build
+diff --git a/db/schema.rbac.sql b/db/schema.rbac.sql
+new file mode 100644
+index 0000000..005f696
+--- /dev/null
++++ b/db/schema.rbac.sql
+@@ -0,0 +1,58 @@
++-- R.0 platform foundations (roles, audit log, plans, usage, flags, moderation). Idempotent: `npm run migrate` can run it any number of times.
++-- Organizations, memberships and org_id columns come in R.0b; usage_events gets its org_id there.
++
++-- Platform role and account state. The default is a plain customer; nothing in a request path grants admin or owner (see src/rbac/bootstrap.js).
++ALTER TABLE users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user' CHECK (role IN ('user','support','admin','owner'));
++ALTER TABLE users ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended'));
++ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version int NOT NULL DEFAULT 0;   -- bumped to sign a person out everywhere
++ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at timestamptz;
++
++-- Append-only audit trail. No foreign keys on purpose: deleting a user must not touch (and the trigger would refuse) a row here.
++CREATE TABLE IF NOT EXISTS audit_log(
++ id bigserial PRIMARY KEY,
++ actor_id uuid, actor_role text,
++ org_id uuid,                                  -- R.0b adds organizations; plain uuid until then
++ action text NOT NULL, target_type text, target_id text,
++ before jsonb, after jsonb, meta jsonb, ip text,
++ created_at timestamptz NOT NULL DEFAULT now());
++CREATE INDEX IF NOT EXISTS audit_log_actor ON audit_log(actor_id, created_at DESC);
++CREATE INDEX IF NOT EXISTS audit_log_org ON audit_log(org_id, created_at DESC);
++CREATE INDEX IF NOT EXISTS audit_log_target ON audit_log(target_type, target_id);
++CREATE INDEX IF NOT EXISTS audit_log_created ON audit_log(created_at DESC);
++CREATE OR REPLACE FUNCTION audit_log_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
++BEGIN RAISE EXCEPTION 'audit_log is append-only (% refused)', TG_OP USING ERRCODE = 'insufficient_privilege'; END $$;
++DROP TRIGGER IF EXISTS audit_log_no_change ON audit_log;
++CREATE TRIGGER audit_log_no_change BEFORE UPDATE OR DELETE ON audit_log FOR EACH ROW EXECUTE FUNCTION audit_log_append_only();
++DROP TRIGGER IF EXISTS audit_log_no_truncate ON audit_log;
++CREATE TRIGGER audit_log_no_truncate BEFORE TRUNCATE ON audit_log FOR EACH STATEMENT EXECUTE FUNCTION audit_log_append_only();
++
++-- Plans: daily limits, NULL = unlimited. Re-running never overwrites limits an admin has changed.
++CREATE TABLE IF NOT EXISTS plans(name text PRIMARY KEY, daily_images int, daily_chat int, created_at timestamptz NOT NULL DEFAULT now());
++INSERT INTO plans(name,daily_images,daily_chat) VALUES ('free',5,30),('pro',50,300),('unlimited',NULL,NULL) ON CONFLICT (name) DO NOTHING;
++
++-- One row per metered action. R.0b adds org_id.
++CREATE TABLE IF NOT EXISTS usage_events(
++ id bigserial PRIMARY KEY,
++ user_id uuid REFERENCES users ON DELETE CASCADE,
++ kind text NOT NULL, units int NOT NULL DEFAULT 1, cost_estimate_usd numeric(12,6), provider text, meta jsonb,
++ created_at timestamptz NOT NULL DEFAULT now());
++CREATE INDEX IF NOT EXISTS usage_events_user ON usage_events(user_id, created_at);
++
++-- Kill switches and the announcement banner (read through src/flags.js).
++CREATE TABLE IF NOT EXISTS feature_flags(key text PRIMARY KEY, value jsonb, updated_by uuid, updated_at timestamptz NOT NULL DEFAULT now());
++INSERT INTO feature_flags(key,value) VALUES ('ai_enabled','true'),('image_generation_enabled','true'),('maintenance_mode','false'),('announcement','null') ON CONFLICT (key) DO NOTHING;
++
++-- Moderation columns on the image tables. stored_images (C.1) is the image table in this repo; generated_images (the image library) gets the
++-- same columns when it exists, so this file works before and after that table is created.
++ALTER TABLE stored_images ADD COLUMN IF NOT EXISTS moderation_status text NOT NULL DEFAULT 'ok';
++ALTER TABLE stored_images ADD COLUMN IF NOT EXISTS removed_at timestamptz;
++ALTER TABLE stored_images ADD COLUMN IF NOT EXISTS removed_by uuid;
++ALTER TABLE stored_images ADD COLUMN IF NOT EXISTS removed_reason text;
++DO $$ BEGIN
++ IF to_regclass('generated_images') IS NOT NULL THEN
++  ALTER TABLE generated_images ADD COLUMN IF NOT EXISTS moderation_status text NOT NULL DEFAULT 'ok';
++  ALTER TABLE generated_images ADD COLUMN IF NOT EXISTS removed_at timestamptz;
++  ALTER TABLE generated_images ADD COLUMN IF NOT EXISTS removed_by uuid;
++  ALTER TABLE generated_images ADD COLUMN IF NOT EXISTS removed_reason text;
++ END IF;
++END $$;
+diff --git a/docs/AI_PROGRESS.md b/docs/AI_PROGRESS.md
+index 2d2e009..3f07ecc 100644
+--- a/docs/AI_PROGRESS.md
++++ b/docs/AI_PROGRESS.md
+@@ -297,3 +297,13 @@ Last checked: 2026-10-18 | Repository revision: not provided (the hash placehold
+ - Exact next action: apply the patch, `npm run migrate` twice, `npm test`, `cd web && npm run build`, then the checks listed in the reply.
+ - Status: paused, awaiting explicit confirmation of the next item (3.x if 3+ snapshot days, otherwise C.4).
+ 
++
++## Checkpoint 2026-10-25 (RBAC phase R.0: platform foundations)
++Last checked: 2026-10-25 | Repository revision: archive, no .git (InstagramUsers-main__22_.zip) plus the stream-6 files (App.tsx hash router, Albums page) | Current item: R.0 | Branch: rbac-r0 (local git, 4 commits on top of the stream-6 baseline) | Diff: patches/r0.diff
++- Status: R.0 IMPLEMENTED - UNVERIFIED. Blockers: no Postgres, Redis, installed packages (express, pg, ioredis, jsonwebtoken) or browser in the sandbox.
++- Completed: db/schema.rbac.sql (users.role/status/token_version/last_active_at, audit_log append-only trigger, plans, usage_events, feature_flags, moderation columns on stored_images and, when it exists, generated_images); src/migrate.js now runs db/schema.sql then every db/schema.*.sql; src/rbac/{permissions,claims,token,guards,middleware,loginPolicy,audit,bootstrap,meHandler,security}.js; src/flags.js; src/admin/{index,guards}.js + routes/ping.js; src/routes/{me,org,public}.js; scripts/check-admin-guards.js (`npm run check:admin`); ratelimit.js hooks (clearLockout, recordSecurityEvent, securityCounts); auth.js (tv in the token, DB-backed requireAuth, suspended login 403, last_active_at); server.js mounts + owner bootstrap; web/src/admin/{pure.ts,useCan.ts,AdminShell.tsx,pages/Overview.jsx}; App.tsx lazy /admin route and staff-only Admin entry; README, .env.example, docs/RBAC_R0.md.
++- Decisions: (1) The image table in this repo is stored_images (C.1); generated_images does not exist here, so its moderation columns are added only when the table exists. (2) The repo has one schema file, not a migrations folder: migrate.js now also runs db/schema.<name>.sql files in name order (this also picks up schema.albums.sql). (3) audit_log has no foreign keys, so deleting a user (GDPR) cannot be blocked by the append-only trigger. (4) auth.js still exports requireAuth and sign, so routes.js is untouched; requireAuth also sets req.uid. (5) Suspended account with the right password: 403 at login; with a wrong password: 401 as before. (6) A flag that is stored as JSON null (announcement) returns null, not the default. (7) The repo's web code is TypeScript; the admin page files are .jsx as the contract says, the shell and hook are .tsx/.ts. (8) Admin router refuses to build (server will not start) if a route lacks requirePermission, in addition to the npm script.
++- Tests: `npm test` 340/341 (306 before + 35 new); the one failure is test 213 (D.1 mic), which fails on the untouched zip as well. 11 deliberate breakages of the new rules were all caught. NOT run: migrate (twice), the server, any curl.exe command in docs/RBAC_R0.md, the web build, a browser. The admin guard script and ping route were run against a throwaway Express stand-in only.
++- Integration notes: routes.js, the image routes and any file outside the R.0 lane were not touched. R.0b extends requireAuth (src/rbac/guards.js, req.org) and adds org_id to usage_events and audit_log's org FK-free column. R.2 adds /usage to src/routes/me.js. If stream 6's App.tsx is not applied, apply it first: patches/r0.diff builds on it.
++- Exact next action: apply the files, `npm run migrate` twice, `npm test`, `npm run check:admin`, then the steps in docs/RBAC_R0.md.
++- Status: paused, awaiting confirmation before R.0b.
+diff --git a/docs/RBAC_R0.md b/docs/RBAC_R0.md
+new file mode 100644
+index 0000000..022d265
+--- /dev/null
++++ b/docs/RBAC_R0.md
+@@ -0,0 +1,66 @@
++# R.0 platform foundations: how to try it on Windows (curl.exe)
++
++Everything below works in **cmd.exe** and in **PowerShell** with the real `curl.exe` (in PowerShell type `curl.exe`, not `curl`, which is a different built-in command).
++JSON is sent from small files with `--data-binary "@file"`, so you never fight quoting rules.
++
++## 0. Setup
++1. `npm run migrate` (run it twice: the second run must change nothing and print no error). It prints `migrated schema.sql` and `migrated schema.rbac.sql`.
++2. Sign up, then make that account the owner (see "Platform roles" in the README): set `OWNER_EMAIL` in `.env`, restart `npm run dev`.
++3. Create `login.json` next to where you run the commands (use your own email and password):
++
++       {"email":"you@example.com","password":"your-password"}
++
++## 1. Log in and keep the token
++cmd.exe:
++
++    curl.exe -s http://localhost:3000/api/auth/login -H "content-type: application/json" --data-binary "@login.json"
++
++Copy the `token` value. In cmd.exe: `set TOKEN=<paste>`. In PowerShell: `$TOKEN="<paste>"`.
++(Below, `%TOKEN%` is cmd.exe; in PowerShell write `$TOKEN` instead.)
++
++## 2. Who am I (GET /api/me)
++
++    curl.exe -s http://localhost:3000/api/me -H "Authorization: Bearer %TOKEN%"
++
++Expected: `{"user":{"id":"...","email":"you@example.com","name":null,"role":"owner"},"permissions":[ ...27 names... ]}`. A customer sees `"role":"user"` and `"permissions":[]`.
++Without the header: HTTP 401 `{"error":"unauthorized"}`.
++
++## 3. Admin API (needs a staff role)
++
++    curl.exe -s -i http://localhost:3000/api/admin/ping -H "Authorization: Bearer %TOKEN%"
++
++Staff: `200 {"ok":true,"role":"owner"}`. A normal customer's token: `403 {"error":"forbidden"}`. No token: `401`. An unknown admin path as staff: `404 {"error":"not found"}`.
++
++## 4. Sign out everywhere (token_version)
++Until the admin users page exists (a later phase), test it by hand in psql:
++
++    psql -U ge -d ge -c "UPDATE users SET token_version=token_version+1 WHERE email='you@example.com'"
++    curl.exe -s -i http://localhost:3000/api/me -H "Authorization: Bearer %TOKEN%"
++
++Expected: `401`. Log in again (step 1) and the new token works.
++
++## 5. Suspended accounts
++    psql -U ge -d ge -c "UPDATE users SET status='suspended' WHERE email='customer@example.com'"
++
++* The customer's old token: `401` on the next request.
++* Logging in with the right password: `403 {"error":"This account is suspended. Contact support."}`. A wrong password still gives `401 invalid credentials`.
++* Undo: `UPDATE users SET status='active' WHERE email='customer@example.com'`.
++
++## 6. Audit log cannot be edited
++    psql -U ge -d ge -c "UPDATE audit_log SET action='x'"
++    psql -U ge -d ge -c "DELETE FROM audit_log"
++    psql -U ge -d ge -c "TRUNCATE audit_log"
++
++Each must fail with `audit_log is append-only (... refused)` (the table may be empty; the triggers still fire for TRUNCATE, and for UPDATE/DELETE once a row exists).
++
++## 7. Admin guard check
++
++    npm run check:admin
++
++Expected: `admin guards ok: 1 route file(s), every route has a requirePermission gate`. If someone adds an admin route without `requirePermission(...)`, this command exits with code 1 and lists the route, and the server refuses to start.
++
++## 8. Security counters (Redis)
++After 10 wrong logins for one email from one address, then the 11th attempt answers `429`. In `redis-cli` (or Memurai's CLI): `KEYS sec:lockout:*` shows an hourly counter `sec:lockout:<YYYYMMDDHH>` with value 1 (dev only; the server itself never uses `KEYS`).
++
++## 9. Admin screen (browser)
++Log in as the owner, open `http://localhost:5173`: an **Admin** entry is at the bottom of the sidebar. Click it: `/admin` shows the Overview page. Log in as a normal customer and open `http://localhost:5173/admin`: you are sent back to the app, and the browser's Network tab shows no admin JavaScript chunk was downloaded.
+diff --git a/package.json b/package.json
+index 87ee0fc..3305a55 100644
+--- a/package.json
++++ b/package.json
+@@ -1,2 +1,2 @@
+-{"name":"growthengine-api","version":"0.1.0","type":"module","scripts":{"start":"node src/server.js","dev":"node --watch src/server.js","worker":"node src/worker.js","migrate":"node src/migrate.js","seed":"node src/seed.js","test":"node --test test/crypto.test.js test/advisor.test.js test/config.test.js test/importer.test.js test/phase1.test.js test/loadenv.test.js test/fix1.test.js test/phase2.test.js test/phaseA1.test.js test/phaseA1c.test.js test/phaseO1.test.js test/onboardingUi.test.js test/onboardingO2.test.js test/phaseO3.test.js test/voiceUi.test.js test/phaseO4.test.js test/profileUi.test.js test/phase42.test.js test/phaseD1.test.js test/phaseA2.test.js test/commentsUi.test.js test/phaseA3.test.js test/competitorsUi.test.js test/storage.test.js test/storedimages.test.js test/commandCenter.test.js"},
++{"name":"growthengine-api","version":"0.1.0","type":"module","scripts":{"start":"node src/server.js","dev":"node --watch src/server.js","worker":"node src/worker.js","migrate":"node src/migrate.js","check:admin":"node scripts/check-admin-guards.js","seed":"node src/seed.js","test":"node --test test/crypto.test.js test/advisor.test.js test/config.test.js test/importer.test.js test/phase1.test.js test/loadenv.test.js test/fix1.test.js test/phase2.test.js test/phaseA1.test.js test/phaseA1c.test.js test/phaseO1.test.js test/onboardingUi.test.js test/onboardingO2.test.js test/phaseO3.test.js test/voiceUi.test.js test/phaseO4.test.js test/profileUi.test.js test/phase42.test.js test/phaseD1.test.js test/phaseA2.test.js test/commentsUi.test.js test/phaseA3.test.js test/competitorsUi.test.js test/storage.test.js test/storedimages.test.js test/commandCenter.test.js test/rbacR0.test.js test/rbacR0Ui.test.js"},
+ "dependencies":{"bcryptjs":"^2.4.3","bullmq":"^5.12.0","cors":"^2.8.5","express":"^4.19.2","express-rate-limit":"^7.4.0","helmet":"^7.1.0","ioredis":"^5.4.1","jsonwebtoken":"^9.0.2","pg":"^8.12.0","sharp":"^0.33.5"}}
+\ No newline at end of file
+diff --git a/scripts/check-admin-guards.js b/scripts/check-admin-guards.js
+new file mode 100644
+index 0000000..3fc6232
+--- /dev/null
++++ b/scripts/check-admin-guards.js
+@@ -0,0 +1,8 @@
++// Fails (exit 1) if any route under the admin router has no requirePermission(...) gate. Run: npm run check:admin  (works on Windows; no database needed)
++import { loadAdminRoutes, unguardedIn } from '../src/admin/index.js';
++try {
++  const routes = await loadAdminRoutes(), bad = unguardedIn(routes);
++  if (bad.length) { console.error('Admin routes WITHOUT a requirePermission(...) gate:\n  ' + bad.join('\n  ')); process.exit(1); }
++  console.log(`admin guards ok: ${routes.length} route file(s), every route has a requirePermission gate`);
++  process.exit(0);
++} catch (e) { console.error('check-admin-guards failed:', e.message); process.exit(1); }
+diff --git a/src/admin/guards.js b/src/admin/guards.js
+new file mode 100644
+index 0000000..2d320f6
+--- /dev/null
++++ b/src/admin/guards.js
+@@ -0,0 +1,18 @@
++// R.0: finds admin routes that are not behind a requirePermission(...) gate. Pure (walks an Express router's stack), so it runs at boot, in
++// scripts/check-admin-guards.js and in the tests. A route is guarded when a requirePermission-tagged function (it carries .permission) is on the route itself
++// or was added with router.use(...) earlier in the same router (or in a parent router before this one was mounted).
++export function unguardedRoutes(router, prefix = '', inherited = false) {
++  const bad = [];
++  let guarded = inherited;
++  for (const layer of router?.stack || []) {
++    if (layer.route) {
++      const handlers = (layer.route.stack || []).map(l => l.handle);
++      if (!guarded && !handlers.some(h => typeof h === 'function' && h.permission)) {
++        const methods = Object.keys(layer.route.methods || {}).filter(m => layer.route.methods[m]).map(m => m.toUpperCase()).join(',') || 'ANY';
++        bad.push(`${methods} ${prefix}${layer.route.path}`);
++      }
++    } else if (layer.handle?.stack) bad.push(...unguardedRoutes(layer.handle, prefix, guarded)); // a nested router
++    else if (typeof layer.handle === 'function' && layer.handle.permission) guarded = true;
++  }
++  return bad;
++}
+diff --git a/src/admin/index.js b/src/admin/index.js
+new file mode 100644
+index 0000000..00c7852
+--- /dev/null
++++ b/src/admin/index.js
+@@ -0,0 +1,46 @@
++// R.0: the admin API (/api/admin). Every request passes requireAuth + requireStaff + a per-user rate limit; every route file under src/admin/routes/
++// is loaded automatically and must export a default Router and `export const mount = '/name'`. Each route must also use requirePermission(...):
++// the router refuses to build (the server will not start) if one does not.
++import { readdirSync } from 'node:fs';
++import path from 'node:path';
++import { fileURLToPath, pathToFileURL } from 'node:url';
++import { unguardedRoutes } from './guards.js';
++
++export const ROUTES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'routes');
++
++// [{file, mount, router}] for every route file, sorted by file name.
++export async function loadAdminRoutes(dir = ROUTES_DIR) {
++  const out = [];
++  for (const file of readdirSync(dir).filter(f => f.endsWith('.js')).sort()) {
++    const m = await import(pathToFileURL(path.join(dir, file)).href);
++    if (!m.default || typeof m.mount !== 'string' || !/^\/[a-z0-9-]+$/i.test(m.mount)) throw new Error(`admin route file ${file} must export a default router and const mount = '/name'`);
++    out.push({ file, mount: m.mount, router: m.default });
++  }
++  const seen = new Set();
++  for (const r of out) { if (seen.has(r.mount)) throw new Error(`admin mount ${r.mount} is used twice (${r.file})`); seen.add(r.mount); }
++  return out;
++}
++// "METHOD /mount/path" for every route without a requirePermission gate, across all route files.
++export const unguardedIn = routes => routes.flatMap(r => unguardedRoutes(r.router, r.mount));
++
++// deps: Router (express), requireAuth, requireStaff, limiter. Nothing is imported from express here so the tests need no packages.
++export async function makeAdminRouter({ Router, requireAuth, requireStaff, limiter, dir = ROUTES_DIR }) {
++  const routes = await loadAdminRoutes(dir), bad = unguardedIn(routes);
++  if (bad.length) throw new Error('admin routes without requirePermission: ' + bad.join(', '));
++  const r = Router();
++  r.use(requireAuth, requireStaff, limiter);
++  for (const x of routes) r.use(x.mount, x.router);
++  r.use((_req, res) => res.status(404).json({ error: 'not found' }));
++  return r;
++}
++
++// The real thing, used by server.js.
++export async function adminRouter() {
++  const [{ Router }, { default: rateLimit }, rbac, rl] = await Promise.all([import('express'), import('express-rate-limit'), import('../rbac/middleware.js'), import('../ratelimit.js')]);
++  const limiter = rateLimit({
++    windowMs: 60000, limit: 300, standardHeaders: true, legacyHeaders: false,
++    keyGenerator: req => String(req.user?.id ?? 'anon'), // after requireAuth, so this is the signed-in staff member, not an IP
++    handler: (_req, res) => { rl.recordSecurityEvent('rate_limit'); res.status(429).json({ error: 'Too many admin requests. Slow down.' }); },
++  });
++  return makeAdminRouter({ Router, requireAuth: rbac.requireAuth, requireStaff: rbac.requireStaff, limiter });
++}
+diff --git a/src/admin/routes/ping.js b/src/admin/routes/ping.js
+new file mode 100644
+index 0000000..103d0fd
+--- /dev/null
++++ b/src/admin/routes/ping.js
+@@ -0,0 +1,6 @@
++// Demo route proving the admin plumbing: GET /api/admin/ping (needs users:read, so every staff role passes).
++import {Router} from 'express';import {requirePermission} from '../../rbac/middleware.js';
++export const mount='/ping';
++const r=Router();
++r.get('/',requirePermission('users:read'),(req,res)=>res.json({ok:true,role:req.user.role}));
++export default r;
+diff --git a/src/auth.js b/src/auth.js
+index fa807bb..43fda41 100644
+--- a/src/auth.js
++++ b/src/auth.js
+@@ -1,7 +1,6 @@
+-import bcrypt from 'bcryptjs';import jwt from 'jsonwebtoken';import {Router} from 'express';import {q} from './db.js';import {loginLocked,loginFailed,loginOk} from './ratelimit.js';
+-const S=()=>{const s=process.env.JWT_SECRET;if(!s||s.length<32)throw new Error('JWT_SECRET missing or shorter than 32 chars');return s}; // no fallback: validated at boot by config.js
+-export const sign=u=>jwt.sign({sub:u.id},S(),{expiresIn:'7d'});
+-export function requireAuth(req,res,next){try{req.uid=jwt.verify((req.headers.authorization||'').replace('Bearer ',''),S()).sub;next()}catch{res.status(401).json({error:'unauthorized'})}}
++import bcrypt from 'bcryptjs';import {Router} from 'express';import {q} from './db.js';import {loginLocked,loginFailed,loginOk} from './ratelimit.js';import {signToken} from './rbac/token.js';import {requireAuth} from './rbac/middleware.js';import {loginBlock} from './rbac/loginPolicy.js';
++export const sign=signToken; // R.0: the token also carries tv (token_version)
++export {requireAuth}; // R.0: loads the user row on every request (src/rbac/middleware.js); routes.js still imports it from here
+ export const auth=Router();
+ const wrap=f=>(req,res,next)=>Promise.resolve(f(req,res,next)).catch(next);
+ auth.post('/register',wrap(async(req,res)=>{const{email,password,acceptTos}=req.body||{};
+@@ -14,4 +13,6 @@ auth.post('/login',wrap(async(req,res)=>{const{email,password}=req.body||{};
+  if(lock){res.set('Retry-After',String(lock));return res.status(429).json({error:`Too many failed logins. Try again in ${Math.ceil(lock/60)} min.`})}
+  const[u]=await q('SELECT * FROM users WHERE email=$1',[e]);
+  if(!u||!await bcrypt.compare(password,u.pass_hash)){await loginFailed(e,req.ip);return res.status(401).json({error:'invalid credentials'})}
+- await loginOk(e,req.ip);res.json({token:sign(u)})}));
++ await loginOk(e,req.ip);
++ const blocked=loginBlock(u);if(blocked)return res.status(blocked.status).json({error:blocked.error}); // R.0: suspended accounts cannot log in
++ await q('UPDATE users SET last_active_at=now() WHERE id=$1',[u.id]);res.json({token:sign(u)})}));
+diff --git a/src/flags.js b/src/flags.js
+new file mode 100644
+index 0000000..ac31269
+--- /dev/null
++++ b/src/flags.js
+@@ -0,0 +1,29 @@
++// R.0: feature flags and kill switches, stored in feature_flags. Reads are served from a 10 second in-process cache; setFlag clears it at once
++// (on this instance; other instances catch up within 10 s). getFlag never throws: if the table cannot be read it returns the default you pass.
++export const FLAG_KEYS = ['ai_enabled', 'image_generation_enabled', 'maintenance_mode', 'gemini_model', 'announcement'];
++export const FLAG_TTL_MS = 10000;
++
++export function makeFlags({ q, ttlMs = FLAG_TTL_MS, now = Date.now }) {
++  let cache = null, loadedAt = 0, inflight = null;
++  async function load() {
++    if (cache && now() - loadedAt < ttlMs) return cache;
++    if (!inflight) inflight = q('SELECT key,value FROM feature_flags').then(rows => { cache = Object.fromEntries(rows.map(r => [r.key, r.value])); loadedAt = now(); return cache; }).finally(() => { inflight = null; });
++    return inflight;
++  }
++  async function getFlag(key, def = null) {
++    try { const m = await load(); return Object.prototype.hasOwnProperty.call(m, key) && m[key] !== undefined ? m[key] : def; }
++    catch { return def; }
++  }
++  async function setFlag(key, value, actorId = null) {
++    if (!FLAG_KEYS.includes(key)) throw Object.assign(new Error('unknown flag ' + key), { status: 400 });
++    await q(`INSERT INTO feature_flags(key,value,updated_by,updated_at) VALUES($1,$2::jsonb,$3,now())
++      ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_by=EXCLUDED.updated_by,updated_at=now()`, [key, JSON.stringify(value ?? null), actorId]);
++    cache = null; loadedAt = 0; // the next read sees the new value
++  }
++  return { getFlag, setFlag };
++}
++
++let real;
++const flags = () => real ??= import('./db.js').then(m => makeFlags({ q: m.q }));
++export const getFlag = async (key, def = null) => (await flags()).getFlag(key, def);
++export const setFlag = async (key, value, actorId = null) => (await flags()).setFlag(key, value, actorId);
+diff --git a/src/migrate.js b/src/migrate.js
+index a0ee952..e233502 100644
+--- a/src/migrate.js
++++ b/src/migrate.js
+@@ -1,4 +1,7 @@
+ import './loadenv.js'; // first import: .env must be loaded before db.js / cache.js read their variables
+ import {validateEnv} from './config.js';validateEnv({needDb:true});
+ import fs from 'node:fs';import {db} from './db.js';
+-await db.query(fs.readFileSync(new URL('../db/schema.sql',import.meta.url),'utf8'));console.log('migrated');await db.end();
++// db/schema.sql first, then every other db/schema.<name>.sql in name order (R.0: schema.rbac.sql). All files are idempotent.
++const dir=new URL('../db/',import.meta.url),files=['schema.sql',...fs.readdirSync(dir).filter(f=>/^schema\..+\.sql$/.test(f)).sort()];
++for(const f of files){await db.query(fs.readFileSync(new URL(f,dir),'utf8'));console.log('migrated',f)}
++await db.end();
+diff --git a/src/ratelimit.js b/src/ratelimit.js
+index b3b3200..bf70891 100644
+--- a/src/ratelimit.js
++++ b/src/ratelimit.js
+@@ -1,5 +1,6 @@
+ // Per-user Redis limits (roadmap 0.3). Fixed window. Fails CLOSED (503) if Redis is down: these protect paid APIs.
+ import { redis } from './cache.js';
++import { isEventType, securityKey, hourKeys, lockoutPattern } from './rbac/security.js';
+ export async function hit(name, uid, max, windowSec) {
+   const k = `rl:${name}:${uid}`, n = await redis.incr(k);
+   if (n === 1) await redis.expire(k, windowSec);
+@@ -11,7 +12,7 @@ export function limit(name, max, windowSec) {
+   return async (req, res, next) => {
+     try {
+       const r = await hit(name, req.uid, max, windowSec);
+-      if (!r.ok) { res.set('Retry-After', String(r.ttl)); return res.status(429).json({ error: r.msg }); }
++      if (!r.ok) { recordSecurityEvent('rate_limit'); res.set('Retry-After', String(r.ttl)); return res.status(429).json({ error: r.msg }); }
+       next();
+     } catch (e) { console.error('ratelimit', e.message); res.status(503).json({ error: 'rate limiter unavailable' }); }
+   };
+@@ -25,6 +26,28 @@ export async function loginLocked(email, ip) {
+ export async function loginFailed(email, ip) {
+   const k = LF(email, ip), n = await redis.incr(k);
+   if (n === 1 || n >= MAXF) await redis.expire(k, LOCK); // lock window restarts at the 10th failure
++  if (n === MAXF) recordSecurityEvent('lockout'); // R.0: counted once, when the lock starts
+   return n;
+ }
+ export const loginOk = (email, ip) => redis.del(LF(email, ip));
++
++// ---- R.0 security hooks (pure helpers: src/rbac/security.js) ----
++// Hourly counters for the admin security view, kept 48 h. Accounting must never break a request, so nothing here throws.
++export async function recordSecurityEvent(type, at = new Date()) {
++  try {
++    if (!isEventType(type)) return;
++    const k = securityKey(type, at);
++    if (await redis.incr(k) === 1) await redis.expire(k, 172800);
++  } catch (e) { console.error('securityEvent', e.message); }
++}
++// Counts for the last `hours` hours, newest first, e.g. [3, 0, 1, ...]; zeros when Redis is unreachable.
++export async function securityCounts(type, hours = 24, at = new Date()) {
++  const keys = hourKeys(type, hours, at);
++  try { return (await redis.mget(keys)).map(v => +v || 0); } catch { return keys.map(() => 0); }
++}
++// Lift a login lockout (admin "unlock"): deletes every lf:<email>:<ip> key for this email. Returns how many keys were removed.
++export async function clearLockout(identifier) {
++  let removed = 0;
++  for await (const keys of redis.scanStream({ match: lockoutPattern(identifier), count: 100 })) if (keys.length) removed += await redis.del(...keys);
++  return removed;
++}
+diff --git a/src/rbac/audit.js b/src/rbac/audit.js
+new file mode 100644
+index 0000000..de51aaa
+--- /dev/null
++++ b/src/rbac/audit.js
+@@ -0,0 +1,32 @@
++// R.0: the audit trail writer. audit(req, {action, targetType, targetId, orgId, before, after, meta}) NEVER throws: a failed audit write is logged,
++// it does not break (or silently allow) the action. Secrets are stripped from before/after/meta before they are stored.
++const SECRET_KEY = /pass|hash|token|secret|api[_-]?key|authorization|cookie|enc$|^enc|credential|private/i;
++const MAX_DEPTH = 6, MAX_STR = 2000;
++
++// Copy of value with every secret-looking field replaced by '[redacted]' and long text cut. Pure.
++export function redact(v, depth = 0) {
++  if (v === null || v === undefined) return v ?? null;
++  if (typeof v === 'string') return v.length > MAX_STR ? v.slice(0, MAX_STR) + '…' : v;
++  if (typeof v !== 'object') return v;
++  if (depth >= MAX_DEPTH) return '[truncated]';
++  if (v instanceof Date) return v.toISOString();
++  if (Array.isArray(v)) return v.slice(0, 100).map(x => redact(x, depth + 1));
++  const o = {};
++  for (const [k, x] of Object.entries(v)) o[k] = SECRET_KEY.test(k) ? '[redacted]' : redact(x, depth + 1);
++  return o;
++}
++const json = v => (v === undefined || v === null ? null : JSON.stringify(redact(v)));
++
++export function makeAudit({ q, log = console.error }) {
++  return async function audit(req, e = {}) {
++    try {
++      if (!e.action || typeof e.action !== 'string') throw new Error('audit needs an action');
++      await q(`INSERT INTO audit_log(actor_id,actor_role,org_id,action,target_type,target_id,before,after,meta,ip) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10)`,
++        [req?.user?.id ?? null, req?.user?.role ?? null, e.orgId ?? req?.org?.id ?? null, e.action, e.targetType ?? null,
++          e.targetId === undefined || e.targetId === null ? null : String(e.targetId), json(e.before), json(e.after), json(e.meta), req?.ip ?? null]);
++    } catch (err) { try { log('audit failed:', e?.action, err?.message); } catch { /* never throws */ } }
++  };
++}
++
++// The real writer (database loaded on first use, so importing this file opens nothing).
++export const audit = (req, e) => makeAudit({ q: async (sql, p) => (await import('../db.js')).q(sql, p) })(req, e);
+diff --git a/src/rbac/bootstrap.js b/src/rbac/bootstrap.js
+new file mode 100644
+index 0000000..8eb417e
+--- /dev/null
++++ b/src/rbac/bootstrap.js
+@@ -0,0 +1,17 @@
++// R.0: owner bootstrap. The ONLY way to get the first owner: set OWNER_EMAIL to an account that has already signed up, then restart the server.
++// Idempotent. No request path grants admin or owner; the role-change endpoint (a later phase) is the only other writer of users.role.
++export function makeBootstrap({ q, env = process.env, log = console }) {
++  return async function bootstrapOwner() {
++    const email = String(env.OWNER_EMAIL ?? '').trim().toLowerCase();
++    if (!email) { log.warn('OWNER_EMAIL is not set: nobody can become the platform owner, so /admin stays closed. Sign up, then set OWNER_EMAIL to that email and restart.'); return { status: 'unset' }; }
++    try {
++      const [u] = await q('SELECT id,role FROM users WHERE lower(email)=$1', [email]);
++      if (!u) { log.warn(`OWNER_EMAIL is set (${email}) but nobody has signed up with that email yet. Sign up first, then restart the server.`); return { status: 'no-user' }; }
++      if (u.role === 'owner') return { status: 'already', userId: u.id };
++      await q("UPDATE users SET role='owner' WHERE id=$1 AND role<>'owner'", [u.id]);
++      log.log(`OWNER_EMAIL: ${email} is now the platform owner (was ${u.role}).`);
++      return { status: 'promoted', userId: u.id, from: u.role };
++    } catch (e) { log.error('owner bootstrap failed:', e.message); return { status: 'error' }; }
++  };
++}
++export const bootstrapOwner = () => makeBootstrap({ q: async (sql, p) => (await import('../db.js')).q(sql, p) })();
+diff --git a/src/rbac/claims.js b/src/rbac/claims.js
+new file mode 100644
+index 0000000..d0f588f
+--- /dev/null
++++ b/src/rbac/claims.js
+@@ -0,0 +1,8 @@
++// R.0: what goes into a session token and how it is read back. Pure (no jsonwebtoken), so the tv (token_version) rules are unit-tested.
++const tvOf = n => (Number.isInteger(n) && n >= 0 ? n : 0);
++export const makeClaims = user => ({ sub: user.id, tv: tvOf(user.token_version) });
++// A token issued before R.0 has no tv: it counts as 0, which is what every existing user row holds, so nobody is signed out by the upgrade.
++export function readClaims(payload) {
++  if (!payload || typeof payload.sub !== 'string' || !payload.sub) throw new Error('bad token');
++  return { sub: payload.sub, tv: tvOf(payload.tv) };
++}
+diff --git a/src/rbac/guards.js b/src/rbac/guards.js
+new file mode 100644
+index 0000000..3a5efc8
+--- /dev/null
++++ b/src/rbac/guards.js
+@@ -0,0 +1,47 @@
++// R.0: authentication and permission gates as a factory (same pattern as insights.js), so the rules run against a fake q in test/rbacR0.test.js.
++// No imports from the database or Express here. R.0b extends requireAuth with the organization (req.org).
++import { can, isPermission, isStaffRole } from './permissions.js';
++
++const USER_COLS = 'id,email,role,status,token_version'; // explicit columns: the password hash is never loaded into req.user
++
++// Why an account or token is refused (null = fine). The caller answers 401 for every reason and never says which.
++export function authProblem(user, tv) {
++  if (!user) return 'unknown user';
++  if (user.status !== 'active') return 'suspended';
++  if ((Number.isInteger(user.token_version) ? user.token_version : 0) !== tv) return 'signed out';
++  return null;
++}
++
++// verify(authorizationHeader) -> {sub, tv} or throws (sync or async).
++export function makeRbac({ q, verify }) {
++  // Every request reloads the user row, so a suspension, a role change or "sign out everywhere" takes effect on the very next call.
++  const requireAuth = async (req, res, next) => {
++    let t;
++    try { t = await verify(req.headers?.authorization); } catch { return res.status(401).json({ error: 'unauthorized' }); }
++    try {
++      const [u] = await q(`SELECT ${USER_COLS} FROM users WHERE id=$1`, [t.sub]);
++      if (authProblem(u, t.tv)) return res.status(401).json({ error: 'unauthorized' });
++      req.user = { id: u.id, email: u.email, role: u.role, status: u.status, token_version: u.token_version };
++      req.uid = u.id; // every existing route reads req.uid
++      next();
++    } catch (e) { next(e); }
++  };
++  // requirePermission('users:read'). The returned function is tagged with .permission so scripts/check-admin-guards.js can find it.
++  // An unknown permission name throws when the route file loads (a typo must not silently open or close a route).
++  const requirePermission = perm => {
++    if (!isPermission(perm)) throw new Error('requirePermission: unknown permission ' + perm);
++    const mw = (req, res, next) => {
++      if (!req.user) return res.status(401).json({ error: 'unauthorized' });
++      if (!can(req.user.role, perm)) return res.status(403).json({ error: 'forbidden' });
++      next();
++    };
++    mw.permission = perm;
++    return mw;
++  };
++  const requireStaff = (req, res, next) => {
++    if (!req.user) return res.status(401).json({ error: 'unauthorized' });
++    if (!isStaffRole(req.user.role)) return res.status(403).json({ error: 'forbidden' });
++    next();
++  };
++  return { requireAuth, requirePermission, requireStaff };
++}
+diff --git a/src/rbac/loginPolicy.js b/src/rbac/loginPolicy.js
+new file mode 100644
+index 0000000..450c2eb
+--- /dev/null
++++ b/src/rbac/loginPolicy.js
+@@ -0,0 +1,5 @@
++// R.0: who may log in. Pure. Called AFTER the password was checked, so a suspended account never learns anything from a wrong password.
++export function loginBlock(user) {
++  if (user && user.status && user.status !== 'active') return { status: 403, error: 'This account is suspended. Contact support.' };
++  return null;
++}
+diff --git a/src/rbac/meHandler.js b/src/rbac/meHandler.js
+new file mode 100644
+index 0000000..80fb2bd
+--- /dev/null
++++ b/src/rbac/meHandler.js
+@@ -0,0 +1,12 @@
++// R.0: GET /api/me. Who am I and what may I do. The frontend's useCan(permission) reads this; R.0b adds the organization permissions to the list.
++import { permissionsFor } from './permissions.js';
++
++export function makeMe({ q }) {
++  return async function me(req, res) {
++    let name = null;
++    try { [{ display_name: name = null } = {}] = await q('SELECT display_name FROM business_profile WHERE user_id=$1', [req.user.id]); }
++    catch (e) { if (e?.code !== '42P01') throw e; } // no profile table yet: no name, not an error
++    const { id, email, role } = req.user;
++    res.json({ user: { id, email, name: name || null, role }, permissions: permissionsFor(role) });
++  };
++}
+diff --git a/src/rbac/middleware.js b/src/rbac/middleware.js
+new file mode 100644
+index 0000000..b2dbb03
+--- /dev/null
++++ b/src/rbac/middleware.js
+@@ -0,0 +1,8 @@
++// R.0: the real gates, bound to the database and to jsonwebtoken. The database and token modules are loaded on first use, so importing
++// this file (for example from an admin route file) never opens a connection.
++import { makeRbac } from './guards.js';
++export { authProblem } from './guards.js';
++export const { requireAuth, requirePermission, requireStaff } = makeRbac({
++  q: async (sql, params) => (await import('../db.js')).q(sql, params),
++  verify: async header => (await import('./token.js')).verifyToken(header),
++});
+diff --git a/src/rbac/permissions.js b/src/rbac/permissions.js
+new file mode 100644
+index 0000000..e873bfe
+--- /dev/null
++++ b/src/rbac/permissions.js
+@@ -0,0 +1,44 @@
++// R.0: platform roles and permissions. Pure (no database, no Express), so every rule is unit-tested in test/rbacR0.test.js.
++// The permission list is the contract: never rename or redefine it here.
++export const ROLES = ['user', 'support', 'admin', 'owner']; // lowest to highest
++export const rank = role => ROLES.indexOf(role); // -1 for anything that is not a role
++
++export const PERMISSIONS = [
++  'users:read', 'users:suspend', 'users:logout', 'users:unlock', 'users:role', 'users:export', 'users:delete', 'users:impersonate',
++  'orgs:read', 'orgs:suspend', 'orgs:manage', 'orgs:export', 'orgs:delete',
++  'usage:read', 'quotas:manage', 'plans:manage', 'killswitch:toggle',
++  'jobs:read', 'jobs:manage', 'content:read', 'content:moderate', 'ig:read', 'ig:manage',
++  'system:read', 'flags:manage', 'announcement:manage', 'audit:read',
++];
++
++const SUPPORT = ['users:read', 'orgs:read', 'usage:read', 'jobs:read', 'content:read', 'ig:read', 'system:read'];
++const ADMIN = [...SUPPORT, 'audit:read', 'users:suspend', 'users:logout', 'users:unlock', 'orgs:suspend', 'orgs:manage', 'quotas:manage', 'plans:manage',
++  'killswitch:toggle', 'jobs:manage', 'content:moderate', 'ig:manage', 'flags:manage', 'announcement:manage'];
++export const ROLE_PERMISSIONS = Object.freeze({ user: Object.freeze([]), support: Object.freeze(SUPPORT), admin: Object.freeze(ADMIN), owner: Object.freeze([...PERMISSIONS]) });
++
++export const isPermission = p => PERMISSIONS.includes(p);
++export const isStaffRole = role => rank(role) >= rank('support');
++export const permissionsFor = role => [...(ROLE_PERMISSIONS[role] || [])];
++export const can = (role, perm) => !!ROLE_PERMISSIONS[role] && ROLE_PERMISSIONS[role].includes(perm);
++
++// May this actor act on this target (suspend, sign out, unlock...)? Strictly higher rank only; an owner may act on an admin (and no one acts on an equal).
++export function canActOn(actorRole, targetRole) {
++  const a = rank(actorRole), t = rank(targetRole);
++  if (a < 0 || t < 0) return false;
++  if (actorRole === 'owner' && targetRole === 'admin') return true;
++  return a > t;
++}
++
++// Changing someone's platform role. actor and target are {id, role}; ownerCount is how many owners exist right now (the caller counts them).
++// Returns {ok:true} or {ok:false, reason}. Owner only, never on yourself, and the last owner can never be demoted.
++export function roleChangeGuard({ actor, target, newRole, ownerCount }) {
++  const no = reason => ({ ok: false, reason });
++  if (!actor || !target) return no('actor and target are required');
++  if (!ROLES.includes(newRole)) return no('unknown role');
++  if (!ROLES.includes(actor.role) || !ROLES.includes(target.role)) return no('unknown role');
++  if (actor.role !== 'owner') return no('only an owner can change platform roles');
++  if (actor.id !== undefined && String(actor.id) === String(target.id)) return no('you cannot change your own role');
++  if (target.role === newRole) return no('that person already has this role');
++  if (target.role === 'owner' && newRole !== 'owner' && !(Number(ownerCount) > 1)) return no('the last owner cannot be demoted');
++  return { ok: true };
++}
+diff --git a/src/rbac/security.js b/src/rbac/security.js
+new file mode 100644
+index 0000000..bee73ef
+--- /dev/null
++++ b/src/rbac/security.js
+@@ -0,0 +1,10 @@
++// R.0: pure helpers for the security counters and lockout keys that src/ratelimit.js stores in Redis. No imports, so they are unit-tested directly.
++export const EVENT_TYPE = /^[a-z_]{1,32}$/;
++export const isEventType = t => typeof t === 'string' && EVENT_TYPE.test(t); // not String(t): undefined must not become the event "undefined"
++// sec:<type>:<YYYYMMDDHH> in UTC: one counter per hour.
++export const securityKey = (type, at = new Date()) => `sec:${type}:${at.toISOString().slice(0, 13).replace(/\D/g, '')}`;
++// The counters for the last `hours` hours, newest first (1 to 48 hours).
++export const hourKeys = (type, hours = 24, at = new Date()) => Array.from({ length: Math.min(48, Math.max(1, Math.floor(hours) || 1)) }, (_, i) => securityKey(type, new Date(at.getTime() - i * 3600e3)));
++// Redis SCAN pattern for every login-lockout key of one email (lf:<email>:<ip>). Glob characters in the email are escaped so "a*@x.com" cannot unlock other people.
++const escapeGlob = s => s.replace(/[\\*?[\]]/g, '\\$&');
++export const lockoutPattern = identifier => `lf:${escapeGlob(String(identifier).toLowerCase())}:*`;
+diff --git a/src/rbac/token.js b/src/rbac/token.js
+new file mode 100644
+index 0000000..1a5868d
+--- /dev/null
++++ b/src/rbac/token.js
+@@ -0,0 +1,6 @@
++// R.0: session tokens (jsonwebtoken). The claims logic lives in claims.js.
++import jwt from 'jsonwebtoken';
++import { makeClaims, readClaims } from './claims.js';
++const S = () => { const s = process.env.JWT_SECRET; if (!s || s.length < 32) throw new Error('JWT_SECRET missing or shorter than 32 chars'); return s; }; // no fallback: validated at boot by config.js
++export const signToken = u => jwt.sign(makeClaims(u), S(), { expiresIn: '7d' });
++export const verifyToken = header => readClaims(jwt.verify(String(header || '').replace('Bearer ', ''), S()));
+diff --git a/src/routes/me.js b/src/routes/me.js
+new file mode 100644
+index 0000000..bc97a0f
+--- /dev/null
++++ b/src/routes/me.js
+@@ -0,0 +1,5 @@
++// /api/me (mounted behind requireAuth in server.js). R.2 adds /usage here.
++import {Router} from 'express';import {q} from '../db.js';import {makeMe} from '../rbac/meHandler.js';
++export const me=Router();
++me.get('/',(req,res,next)=>makeMe({q})(req,res).catch(next));
++export default me;
+diff --git a/src/routes/org.js b/src/routes/org.js
+new file mode 100644
+index 0000000..992b040
+--- /dev/null
++++ b/src/routes/org.js
+@@ -0,0 +1,4 @@
++// /api/org (mounted behind requireAuth in server.js). Empty until R.5; R.0b adds the organization gates.
++import {Router} from 'express';
++export const org=Router();
++export default org;
+diff --git a/src/routes/public.js b/src/routes/public.js
+new file mode 100644
+index 0000000..2a21d7f
+--- /dev/null
++++ b/src/routes/public.js
+@@ -0,0 +1,4 @@
++// /api/public (mounted WITHOUT auth in server.js, before the authenticated /api router). Empty until R.4. Nothing private belongs here.
++import {Router} from 'express';
++export const pub=Router();
++export default pub;
+diff --git a/src/server.js b/src/server.js
+index ed5cae7..43fc502 100644
+--- a/src/server.js
++++ b/src/server.js
+@@ -1,17 +1,20 @@
+ import './loadenv.js'; // first import: .env must be loaded before db.js / cache.js read their variables
+ import {validateEnv} from './config.js';validateEnv(); // 0.2: exit nonzero with a clear message before anything else loads
+ import express from 'express';import helmet from 'helmet';import cors from 'cors';import rateLimit from 'express-rate-limit';
+-import {db} from './db.js';import {igConnect,compliance} from './igwire.js';import {redis} from './cache.js';import {auth} from './auth.js';import {api} from './routes.js';import {startWorker,startPublisher} from './worker.js';import path from 'node:path';import fs from 'node:fs';
++import {db} from './db.js';import {igConnect,compliance} from './igwire.js';import {redis} from './cache.js';import {auth,requireAuth} from './auth.js';import {api} from './routes.js';import {me} from './routes/me.js';import {org} from './routes/org.js';import {pub as publicRoutes} from './routes/public.js';import {adminRouter} from './admin/index.js';import {bootstrapOwner} from './rbac/bootstrap.js';import {recordSecurityEvent} from './ratelimit.js';import {startWorker,startPublisher} from './worker.js';import path from 'node:path';import fs from 'node:fs';
+ const app=express();app.set('trust proxy',1);app.use(helmet(),cors({origin:process.env.CORS_ORIGIN?.split(',')||(process.env.NODE_ENV==='production'?false:true)}),express.json({limit:'8mb'}),express.text({type:'text/csv',limit:'5mb'}));
+-app.use(rateLimit({windowMs:6e4,limit:120}));
++app.use(rateLimit({windowMs:6e4,limit:120,handler:(_q,res,_n,o)=>{recordSecurityEvent('rate_limit');res.status(o.statusCode).send(o.message)}})); // R.0: blocks are counted for the admin security view
+ app.get('/health',(_,r)=>r.json({ok:true}));
+ app.get('/ready',async(_,r)=>{try{await db.query('SELECT 1');await redis.ping();r.json({ok:true,db:true,redis:true})}catch(e){r.status(503).json({ok:false,error:e.message})}}); // checks the dependencies /health does not
+ app.get('/api/instagram/connect/callback',(req,res,next)=>Promise.resolve(igConnect.callback(req,res)).catch(next)); // public: Facebook redirects the browser here
+ const form=express.urlencoded({extended:false,limit:'16kb'}),pub=f=>(req,res,next)=>Promise.resolve(f(req,res)).catch(next);
+ app.post('/api/instagram/deauthorize',form,pub(compliance.deauthorize));app.post('/api/instagram/data-deletion',form,pub(compliance.dataDeletion)); // A.1d: public, called by Meta; authenticated by the signed_request HMAC
+ app.get('/api/instagram/deletion-status',pub(compliance.deletionStatus));app.get('/privacy',pub(compliance.privacy));
+-app.use('/api/auth',auth);app.use('/api',api);
++app.use('/api/auth',auth);app.use('/api/public',publicRoutes); // R.0: public routes need no login
++app.use('/api/me',requireAuth,me);app.use('/api/org',requireAuth,org);app.use('/api/admin',await adminRouter()); // before /api, which would answer 401/404 for these paths
++app.use('/api',api);
+ const dist=path.resolve('web/dist');if(fs.existsSync(dist)){app.use(express.static(dist));app.get('*',(_q,r)=>r.sendFile(path.join(dist,'index.html')))}
+ app.use((e,_q,res,_n)=>{console.error(e);res.status(e.status||500).json({error:e.message})});
+ const port=process.env.PORT||3000;app.listen(port,()=>console.log('API on :'+port));
++bootstrapOwner(); // R.0: OWNER_EMAIL -> role owner (idempotent, never throws)
+ if(process.env.INLINE_WORKER==='1'){startWorker();startPublisher()}
+diff --git a/test/rbacR0.test.js b/test/rbacR0.test.js
+new file mode 100644
+index 0000000..3c7d70a
+--- /dev/null
++++ b/test/rbacR0.test.js
+@@ -0,0 +1,280 @@
++// R.0 platform foundations: permissions, session claims, auth gates, audit, flags, owner bootstrap, security counters, admin router guards,
++// GET /api/me, the migration, and the wiring in auth.js / server.js. Pure logic and DI factories run against fakes (no database, Redis or Express needed);
++// the wiring is checked by reading the source, like the other phase tests.
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import path from 'node:path';
++import { ROLES, rank, PERMISSIONS, ROLE_PERMISSIONS, can, canActOn, roleChangeGuard, permissionsFor, isStaffRole, isPermission } from '../src/rbac/permissions.js';
++import { makeClaims, readClaims } from '../src/rbac/claims.js';
++import { makeRbac, authProblem } from '../src/rbac/guards.js';
++import { loginBlock } from '../src/rbac/loginPolicy.js';
++import { makeAudit, redact } from '../src/rbac/audit.js';
++import { makeFlags, FLAG_KEYS } from '../src/flags.js';
++import { makeBootstrap } from '../src/rbac/bootstrap.js';
++import { securityKey, hourKeys, lockoutPattern, isEventType } from '../src/rbac/security.js';
++import { makeMe } from '../src/rbac/meHandler.js';
++import { unguardedRoutes } from '../src/admin/guards.js';
++import { loadAdminRoutes, makeAdminRouter, unguardedIn } from '../src/admin/index.js';
++import * as mw from '../src/rbac/middleware.js';
++
++const src = p => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
++const res = () => { const r = { code: 200, body: undefined }; r.status = c => { r.code = c; return r; }; r.json = b => { r.body = b; return r; }; return r; };
++
++// ---------- permissions ----------
++const CONTRACT = ['users:read', 'users:suspend', 'users:logout', 'users:unlock', 'users:role', 'users:export', 'users:delete', 'users:impersonate', 'orgs:read', 'orgs:suspend', 'orgs:manage', 'orgs:export', 'orgs:delete',
++  'usage:read', 'quotas:manage', 'plans:manage', 'killswitch:toggle', 'jobs:read', 'jobs:manage', 'content:read', 'content:moderate', 'ig:read', 'ig:manage', 'system:read', 'flags:manage', 'announcement:manage', 'audit:read'];
++test('permission list is exactly the contract; roles rank user < support < admin < owner', () => {
++  assert.deepEqual([...PERMISSIONS].sort(), [...CONTRACT].sort()); assert.equal(new Set(PERMISSIONS).size, PERMISSIONS.length);
++  assert.deepEqual(ROLES, ['user', 'support', 'admin', 'owner']); assert.deepEqual(ROLES.map(rank), [0, 1, 2, 3]); assert.equal(rank('god'), -1);
++});
++test('role mapping: user none; support read-only set; admin = support + the listed additions; owner everything', () => {
++  assert.deepEqual(permissionsFor('user'), []);
++  assert.deepEqual([...ROLE_PERMISSIONS.support].sort(), ['content:read', 'ig:read', 'jobs:read', 'orgs:read', 'system:read', 'usage:read', 'users:read'].sort());
++  const add = ['audit:read', 'users:suspend', 'users:logout', 'users:unlock', 'orgs:suspend', 'orgs:manage', 'quotas:manage', 'plans:manage', 'killswitch:toggle', 'jobs:manage', 'content:moderate', 'ig:manage', 'flags:manage', 'announcement:manage'];
++  assert.deepEqual([...ROLE_PERMISSIONS.admin].sort(), [...ROLE_PERMISSIONS.support, ...add].sort());
++  assert.deepEqual([...ROLE_PERMISSIONS.owner].sort(), [...CONTRACT].sort());
++  for (const p of ['users:role', 'users:export', 'users:delete', 'users:impersonate', 'orgs:export', 'orgs:delete']) { assert.equal(can('admin', p), false, 'admin lacks ' + p); assert.equal(can('owner', p), true); }
++});
++test('superset invariants: every role has at least the permissions of the role below; nothing outside the list', () => {
++  for (let i = 1; i < ROLES.length; i++) for (const p of ROLE_PERMISSIONS[ROLES[i - 1]]) assert.ok(ROLE_PERMISSIONS[ROLES[i]].includes(p), `${ROLES[i]} has ${p}`);
++  for (const r of ROLES) for (const p of ROLE_PERMISSIONS[r]) assert.ok(PERMISSIONS.includes(p), p);
++  assert.ok(ROLES.slice(1).every((r, i) => ROLE_PERMISSIONS[r].length > ROLE_PERMISSIONS[ROLES[i]].length || r === 'support'), 'each step up adds powers');
++  assert.equal(can('nobody', 'users:read'), false); assert.equal(can('owner', 'made:up'), false); assert.equal(can(undefined, 'users:read'), false);
++  assert.equal(isPermission('users:read'), true); assert.equal(isPermission('users:READ'), false);
++  assert.deepEqual([isStaffRole('user'), isStaffRole('support'), isStaffRole('admin'), isStaffRole('owner'), isStaffRole('x')], [false, true, true, true, false]);
++  const p = permissionsFor('admin'); p.push('hack'); assert.ok(!can('admin', 'hack') && !ROLE_PERMISSIONS.admin.includes('hack'), 'callers cannot mutate the table');
++});
++test('canActOn: strictly higher rank only, plus owner on admin; unknown roles never', () => {
++  const want = { owner: { owner: false, admin: true, support: true, user: true }, admin: { owner: false, admin: false, support: true, user: true }, support: { owner: false, admin: false, support: false, user: true }, user: { owner: false, admin: false, support: false, user: false } };
++  for (const a of ROLES) for (const t of ROLES) assert.equal(canActOn(a, t), want[a][t], `${a} on ${t}`);
++  for (const bad of [undefined, null, 'root', '']) { assert.equal(canActOn(bad, 'user'), false); assert.equal(canActOn('owner', bad), false); }
++});
++test('roleChangeGuard: owner only, never yourself, never the last owner, real roles, real change', () => {
++  const o = { id: 'o1', role: 'owner' }, o2 = { id: 'o2', role: 'owner' }, a = { id: 'a1', role: 'admin' }, u = { id: 'u1', role: 'user' };
++  assert.deepEqual(roleChangeGuard({ actor: o, target: u, newRole: 'support', ownerCount: 1 }), { ok: true });
++  assert.deepEqual(roleChangeGuard({ actor: o, target: a, newRole: 'user', ownerCount: 1 }), { ok: true });
++  assert.deepEqual(roleChangeGuard({ actor: o, target: u, newRole: 'owner', ownerCount: 1 }), { ok: true }, 'an owner may appoint another owner');
++  assert.deepEqual(roleChangeGuard({ actor: o, target: o2, newRole: 'admin', ownerCount: 2 }), { ok: true }, 'two owners: one may demote the other');
++  const no = (args, re) => { const r = roleChangeGuard(args); assert.equal(r.ok, false); assert.match(r.reason, re); };
++  no({ actor: a, target: u, newRole: 'support', ownerCount: 1 }, /only an owner/); no({ actor: { id: 's', role: 'support' }, target: u, newRole: 'admin', ownerCount: 1 }, /only an owner/); no({ actor: u, target: u, newRole: 'admin', ownerCount: 1 }, /only an owner/);
++  no({ actor: o, target: o, newRole: 'admin', ownerCount: 2 }, /your own role/); no({ actor: o, target: { id: 'o1', role: 'owner' }, newRole: 'owner', ownerCount: 3 }, /your own role/);
++  no({ actor: o, target: o2, newRole: 'admin', ownerCount: 1 }, /last owner/); no({ actor: o, target: o2, newRole: 'user', ownerCount: 0 }, /last owner/); no({ actor: o, target: o2, newRole: 'user' }, /last owner/);
++  no({ actor: o, target: u, newRole: 'superuser', ownerCount: 1 }, /unknown role/); no({ actor: o, target: u, newRole: 'user', ownerCount: 1 }, /already/); no({ actor: o, target: { id: 'x', role: 'wizard' }, newRole: 'user', ownerCount: 1 }, /unknown role/);
++  no({ actor: null, target: u, newRole: 'user', ownerCount: 1 }, /required/); no({ target: u, newRole: 'admin' }, /required/);
++});
++
++// ---------- session claims and gates ----------
++test('claims: the token carries tv; a token without tv counts as 0; junk is refused', () => {
++  assert.deepEqual(makeClaims({ id: 'u1', token_version: 3 }), { sub: 'u1', tv: 3 }); assert.deepEqual(makeClaims({ id: 'u1' }), { sub: 'u1', tv: 0 });
++  assert.deepEqual(makeClaims({ id: 'u1', token_version: -1 }), { sub: 'u1', tv: 0 }); assert.deepEqual(makeClaims({ id: 'u1', token_version: '4' }), { sub: 'u1', tv: 0 });
++  assert.deepEqual(readClaims({ sub: 'u1' }), { sub: 'u1', tv: 0 }, 'a pre-R.0 token'); assert.deepEqual(readClaims({ sub: 'u1', tv: 2, iat: 1 }), { sub: 'u1', tv: 2 });
++  for (const bad of [null, undefined, {}, { sub: 5 }, { sub: '' }]) assert.throws(() => readClaims(bad), /bad token/);
++});
++const row = (o = {}) => ({ id: 'u1', email: 'a@x.com', role: 'user', status: 'active', token_version: 0, pass_hash: 'SECRET-HASH', ...o });
++function rbac({ rows = [row()], claims = { sub: 'u1', tv: 0 }, fail } = {}) {
++  const sqls = []; const q = async (sql, p) => { sqls.push({ sql, p }); if (fail) throw new Error('db down'); return rows.filter(r => r.id === p[0]); };
++  const verify = async h => { if (!h) throw new Error('no token'); if (h === 'Bearer bad') throw new Error('jwt malformed'); return claims; };
++  return { ...makeRbac({ q, verify }), sqls };
++}
++const run = async (h, req) => { const r = res(), rq = { headers: {}, ...req }; let nexted = false, err; await h(rq, r, e => { nexted = true; err = e; }); return { r, nexted, err, rq }; };
++test('authProblem: missing, suspended and out-of-date tokens are refused; tv missing on the row counts as 0', () => {
++  assert.equal(authProblem(row(), 0), null); assert.equal(authProblem(undefined, 0), 'unknown user'); assert.equal(authProblem(row({ status: 'suspended' }), 0), 'suspended');
++  assert.equal(authProblem(row({ token_version: 2 }), 1), 'signed out'); assert.equal(authProblem(row({ token_version: 2 }), 2), null); assert.equal(authProblem(row({ token_version: undefined }), 0), null);
++  assert.equal(authProblem(row({ status: undefined }), 0), 'suspended', 'a row without an active status is not trusted');
++});
++test('requireAuth: loads the user on every request, sets req.user and req.uid, never copies the password hash', async () => {
++  const g = rbac({ rows: [row({ role: 'admin' })] });
++  const { nexted, rq: req } = await run(g.requireAuth, { headers: { authorization: 'Bearer good' } }); assert.equal(nexted, true);
++  assert.deepEqual(req.user, { id: 'u1', email: 'a@x.com', role: 'admin', status: 'active', token_version: 0 }); assert.equal(req.uid, 'u1'); assert.ok(!JSON.stringify(req).includes('SECRET-HASH'));
++  await run(g.requireAuth, { headers: { authorization: 'Bearer good' } }); assert.equal(g.sqls.length, 2, 'one lookup per request, no caching');
++  assert.ok(!/\*|pass_hash/.test(g.sqls[0].sql), 'explicit columns'); assert.match(g.sqls[0].sql, /FROM users WHERE id=\$1/); assert.deepEqual(g.sqls[0].p, ['u1']);
++});
++test('requireAuth: 401 for no token, a bad token, an unknown or suspended user, and a stale tv (sign out everywhere)', async () => {
++  const cases = { 'no header': [{}, rbac()], 'bad token': [{ authorization: 'Bearer bad' }, rbac()], 'unknown user': [{ authorization: 'Bearer ok' }, rbac({ rows: [] })], 'suspended': [{ authorization: 'Bearer ok' }, rbac({ rows: [row({ status: 'suspended' })] })],
++    'tv behind the row': [{ authorization: 'Bearer ok' }, rbac({ rows: [row({ token_version: 1 })], claims: { sub: 'u1', tv: 0 } })], 'tv ahead of the row': [{ authorization: 'Bearer ok' }, rbac({ rows: [row({ token_version: 0 })], claims: { sub: 'u1', tv: 5 } })] };
++  for (const [name, [headers, g]] of Object.entries(cases)) { const { r, nexted } = await run(g.requireAuth, { headers }); assert.equal(r.code, 401, name); assert.deepEqual(r.body, { error: 'unauthorized' }, name + ': same answer for every reason'); assert.equal(nexted, false, name); }
++  const ok = await run(rbac({ rows: [row({ token_version: 4 })], claims: { sub: 'u1', tv: 4 } }).requireAuth, { headers: { authorization: 'Bearer ok' } }); assert.equal(ok.nexted, true);
++  const dead = await run(rbac({ fail: true }).requireAuth, { headers: { authorization: 'Bearer ok' } }); assert.equal(dead.nexted, true); assert.match(dead.err.message, /db down/, 'a database error is an error, not a silent pass');
++});
++test('requirePermission: tagged with .permission, 403 without it, 401 without a user, unknown names throw at load time', async () => {
++  const { requirePermission, requireStaff } = rbac(), m = requirePermission('users:suspend'); assert.equal(m.permission, 'users:suspend');
++  for (const [role, want] of [['user', 403], ['support', 403], ['admin', 'next'], ['owner', 'next']]) { const { r, nexted } = await run(m, { user: { role } }); assert.equal(want === 'next' ? nexted : r.code, want === 'next' ? true : want, role); }
++  assert.deepEqual((await run(m, { user: { role: 'support' } })).r.body, { error: 'forbidden' }, 'does not name the missing permission'); assert.equal((await run(m, {})).r.code, 401);
++  assert.throws(() => requirePermission('users:reed'), /unknown permission/); assert.throws(() => requirePermission(undefined), /unknown permission/);
++  for (const [role, want] of [['user', 403], ['support', 'next'], ['admin', 'next'], ['owner', 'next'], ['ghost', 403]]) { const { r, nexted } = await run(requireStaff, { user: { role } }); assert.equal(want === 'next' ? nexted : r.code, want === 'next' ? true : want, 'staff ' + role); }
++  assert.equal((await run(requireStaff, {})).r.code, 401); assert.equal(requireStaff.permission, undefined, 'requireStaff is not a permission gate');
++});
++test('middleware.js exports the real gates without opening a database connection', () => {
++  assert.deepEqual(Object.keys(mw).sort(), ['authProblem', 'requireAuth', 'requirePermission', 'requireStaff']); assert.equal(mw.requirePermission('audit:read').permission, 'audit:read');
++});
++test('login policy: only active accounts get a token', () => {
++  assert.equal(loginBlock({ status: 'active' }), null); assert.equal(loginBlock({}), null, 'rows from before the migration'); assert.equal(loginBlock(undefined), null);
++  assert.deepEqual(loginBlock({ status: 'suspended' }), { status: 403, error: 'This account is suspended. Contact support.' });
++});
++
++// ---------- audit ----------
++test('redact: secrets are replaced at any depth, text is cut, dates and arrays are safe', () => {
++  const r = redact({ email: 'a@x.com', pass_hash: 'h', password: 'p', token: 't', accessToken: 'x', api_key: 'k', enc: 'e', nested: { Authorization: 'Bearer z', ok: 1, list: [{ secret: 's', fine: 'f' }] }, long: 'x'.repeat(2500), when: new Date('2026-10-25T00:00:00Z'), n: null });
++  assert.equal(r.email, 'a@x.com'); for (const k of ['pass_hash', 'password', 'token', 'accessToken', 'api_key', 'enc']) assert.equal(r[k], '[redacted]', k);
++  assert.equal(r.nested.Authorization, '[redacted]'); assert.equal(r.nested.ok, 1); assert.deepEqual(r.nested.list, [{ secret: '[redacted]', fine: 'f' }]);
++  assert.ok(r.long.length < 2100 && r.long.endsWith('…')); assert.equal(r.when, '2026-10-25T00:00:00.000Z'); assert.equal(r.n, null);
++  let deep = { v: 1 }; for (let i = 0; i < 12; i++) deep = { d: deep }; assert.match(JSON.stringify(redact(deep)), /truncated/); assert.equal(redact(undefined), null); assert.equal(redact(5), 5);
++});
++test('audit writes the actor, role, org, target, redacted before/after and ip; it never throws', async () => {
++  const calls = []; const audit = makeAudit({ q: async (sql, p) => { calls.push({ sql, p }); }, log: () => {} });
++  await audit({ user: { id: 'a1', role: 'admin' }, org: { id: 'org1' }, ip: '1.2.3.4' }, { action: 'user.suspend', targetType: 'user', targetId: 42, before: { status: 'active', pass_hash: 'x' }, after: { status: 'suspended' }, meta: { reason: 'spam' } });
++  const c = calls[0]; assert.match(c.sql, /^INSERT INTO audit_log\(actor_id,actor_role,org_id,action,target_type,target_id,before,after,meta,ip\) VALUES\(\$1,\$2,\$3,\$4,\$5,\$6,\$7::jsonb,\$8::jsonb,\$9::jsonb,\$10\)$/);
++  assert.deepEqual(c.p.slice(0, 6), ['a1', 'admin', 'org1', 'user.suspend', 'user', '42']); assert.deepEqual(JSON.parse(c.p[6]), { status: 'active', pass_hash: '[redacted]' }); assert.deepEqual(JSON.parse(c.p[7]), { status: 'suspended' }); assert.deepEqual(JSON.parse(c.p[8]), { reason: 'spam' }); assert.equal(c.p[9], '1.2.3.4');
++  await audit({ user: { id: 'a1', role: 'owner' } }, { action: 'x', orgId: 'explicit' }); assert.deepEqual(calls[1].p.slice(0, 3), ['a1', 'owner', 'explicit']); assert.deepEqual(calls[1].p.slice(4), [null, null, null, null, null, null], 'optional parts are NULL');
++  await audit(undefined, { action: 'system.job' }); assert.deepEqual(calls[2].p.slice(0, 3), [null, null, null]);
++  const logs = []; const bad = makeAudit({ q: async () => { throw new Error('insert failed'); }, log: (...a) => logs.push(a.join(' ')) });
++  assert.equal(await bad({ user: { id: 'a' } }, { action: 'y' }), undefined); assert.match(logs[0], /insert failed/);
++  assert.equal(await makeAudit({ q: async () => { throw new Error('no'); }, log: () => { throw new Error('log broke'); } })({}, { action: 'z' }), undefined, 'even a failing logger cannot throw');
++  await makeAudit({ q: async () => { calls.push('called'); }, log: () => {} })({}, {}); assert.ok(!calls.includes('called'), 'no action: nothing written, nothing thrown');
++});
++
++// ---------- flags ----------
++test('flags: 10 second cache, setFlag clears it, defaults when missing or unreadable, unknown keys refused', async () => {
++  let t = 1000, loads = 0, rows = [{ key: 'ai_enabled', value: true }, { key: 'announcement', value: null }, { key: 'maintenance_mode', value: false }]; const writes = [];
++  const q = async (sql, p) => { if (/^SELECT/.test(sql)) { loads++; return rows; } writes.push({ sql, p }); rows = rows.map(r => r.key === p[0] ? { ...r, value: JSON.parse(p[1]) } : r); };
++  const f = makeFlags({ q, now: () => t });
++  assert.equal(await f.getFlag('ai_enabled', false), true); assert.equal(await f.getFlag('maintenance_mode', true), false); assert.equal(loads, 1, 'second read from the cache');
++  assert.equal(await f.getFlag('announcement', 'dflt'), null, 'a stored null is a value'); assert.equal(await f.getFlag('gemini_model', 'gemini-2.5-flash'), 'gemini-2.5-flash', 'absent: the default'); assert.equal(await f.getFlag('nope'), null);
++  t += 9999; await f.getFlag('ai_enabled'); assert.equal(loads, 1, 'still cached at 9.999 s'); t += 2; await f.getFlag('ai_enabled'); assert.equal(loads, 2, 'reloaded after 10 s');
++  await f.setFlag('ai_enabled', false, 'admin-1'); assert.match(writes[0].sql, /INSERT INTO feature_flags\(key,value,updated_by,updated_at\) VALUES\(\$1,\$2::jsonb,\$3,now\(\)\)\s+ON CONFLICT \(key\) DO UPDATE/); assert.deepEqual(writes[0].p, ['ai_enabled', 'false', 'admin-1']);
++  assert.equal(await f.getFlag('ai_enabled', true), false, 'visible at once, no waiting for the TTL'); assert.equal(loads, 3);
++  await f.setFlag('announcement', { text: 'Maintenance at 9', level: 'info' }, null); assert.deepEqual(JSON.parse(writes[1].p[1]), { text: 'Maintenance at 9', level: 'info' });
++  await assert.rejects(() => f.setFlag('drop_table', 1), /unknown flag/); assert.equal(writes.length, 2); assert.deepEqual(FLAG_KEYS, ['ai_enabled', 'image_generation_enabled', 'maintenance_mode', 'gemini_model', 'announcement']);
++  const dead = makeFlags({ q: async () => { throw new Error('down'); } }); assert.equal(await dead.getFlag('ai_enabled', true), true, 'unreadable table: the default, never a throw');
++  let n = 0; const slow = makeFlags({ q: async () => { n++; await new Promise(r => setTimeout(r, 5)); return []; } }); await Promise.all([slow.getFlag('a'), slow.getFlag('b'), slow.getFlag('c')]); assert.equal(n, 1, 'concurrent reads share one query');
++});
++
++// ---------- owner bootstrap ----------
++test('owner bootstrap: only OWNER_EMAIL, only an existing user, idempotent, logged, never throws', async () => {
++  const mk = (env, users) => { const calls = [], logs = { warn: [], log: [], error: [] }; const q = async (sql, p) => { calls.push({ sql, p }); if (/^SELECT/.test(sql)) return users.filter(u => u.email === p[0]); return []; };
++    const log = { warn: m => logs.warn.push(m), log: m => logs.log.push(m), error: (...m) => logs.error.push(m.join(' ')) }; return { run: makeBootstrap({ q, env, log }), calls, logs }; };
++  let b = mk({}, []); assert.deepEqual(await b.run(), { status: 'unset' }); assert.equal(b.calls.length, 0, 'no email: no query, nobody promoted'); assert.match(b.logs.warn[0], /OWNER_EMAIL is not set/);
++  b = mk({ OWNER_EMAIL: '   ' }, []); assert.equal((await b.run()).status, 'unset');
++  b = mk({ OWNER_EMAIL: 'Boss@Example.com ' }, []); assert.equal((await b.run()).status, 'no-user'); assert.match(b.logs.warn[0], /sign up/i); assert.equal(b.calls.length, 1, 'never creates a user');
++  b = mk({ OWNER_EMAIL: 'Boss@Example.com ' }, [{ id: 'u9', email: 'boss@example.com', role: 'user' }]); assert.deepEqual(await b.run(), { status: 'promoted', userId: 'u9', from: 'user' });
++  assert.deepEqual(b.calls[0].p, ['boss@example.com']); assert.equal(b.calls[1].sql, "UPDATE users SET role='owner' WHERE id=$1 AND role<>'owner'"); assert.deepEqual(b.calls[1].p, ['u9']); assert.match(b.logs.log[0], /now the platform owner/);
++  b = mk({ OWNER_EMAIL: 'boss@example.com' }, [{ id: 'u9', email: 'boss@example.com', role: 'owner' }]); assert.deepEqual(await b.run(), { status: 'already', userId: 'u9' }); assert.equal(b.calls.length, 1, 'already owner: no write');
++  const logs = []; assert.deepEqual(await makeBootstrap({ q: async () => { throw new Error('db down'); }, env: { OWNER_EMAIL: 'a@b.c' }, log: { warn() {}, log() {}, error: (...m) => logs.push(m.join(' ')) } })(), { status: 'error' }); assert.match(logs[0], /db down/);
++});
++
++// ---------- security counters (pure parts) ----------
++test('security counters: hourly UTC keys, only safe event names, lockout patterns cannot match other people', () => {
++  assert.equal(securityKey('lockout', new Date('2026-10-25T13:45:10Z')), 'sec:lockout:2026102513'); assert.equal(securityKey('rate_limit', new Date('2026-01-02T00:00:00Z')), 'sec:rate_limit:2026010200');
++  assert.deepEqual(hourKeys('x', 3, new Date('2026-10-25T00:10:00Z')), ['sec:x:2026102500', 'sec:x:2026102423', 'sec:x:2026102422']);
++  assert.equal(hourKeys('x', 0).length, 1); assert.equal(hourKeys('x', 500).length, 48); assert.equal(hourKeys('x').length, 24);
++  for (const ok of ['lockout', 'rate_limit']) assert.equal(isEventType(ok), true, ok); for (const bad of ['', 'Lockout', 'a:b', 'x*', 'a'.repeat(33), undefined, 'a b']) assert.equal(isEventType(bad), false, String(bad));
++  assert.equal(lockoutPattern('Boss@Example.com'), 'lf:boss@example.com:*'); assert.equal(lockoutPattern('a*@x.com'), 'lf:a\\*@x.com:*'); assert.equal(lockoutPattern('a[b]?@x.com'), 'lf:a\\[b\\]\\?@x.com:*');
++  const rl = src('src/ratelimit.js');
++  assert.match(rl, /export async function clearLockout\(identifier\)/); assert.match(rl, /export async function recordSecurityEvent\(type/); assert.match(rl, /export async function securityCounts/);
++  assert.match(rl, /if \(!r\.ok\) \{ recordSecurityEvent\('rate_limit'\)/, 'the per-user limiter counts its blocks'); assert.match(rl, /if \(n === MAXF\) recordSecurityEvent\('lockout'\)/, 'a lockout is counted once, when it starts');
++  assert.match(rl, /scanStream\(\{ match: lockoutPattern\(identifier\)/); assert.ok(!/\bKEYS\b/.test(rl.replace(/\/\/.*$/gm, '')), 'SCAN, never the blocking KEYS command');
++});
++
++// ---------- admin router ----------
++// A fake router in Express's shape: stack of layers; route layers carry route.stack[].handle, nested routers carry handle.stack.
++const route = (method, p, ...handlers) => ({ route: { path: p, methods: { [method]: true }, stack: handlers.map(h => ({ handle: h })) } });
++const gate = perm => Object.assign(() => {}, { permission: perm }), plain = () => {};
++const fakeRouter = (...stack) => ({ stack });
++test('unguardedRoutes: finds routes without a requirePermission gate; router-level gates and nested routers count', () => {
++  assert.deepEqual(unguardedRoutes(fakeRouter(route('get', '/', gate('users:read'), plain), route('post', '/x', plain, gate('users:suspend')))), []);
++  assert.deepEqual(unguardedRoutes(fakeRouter(route('get', '/open', plain), route('delete', '/:id', gate('users:delete'), plain), route('put', '/loose', plain))), ['GET /open', 'PUT /loose']);
++  assert.deepEqual(unguardedRoutes(fakeRouter(route('get', '/', plain)), '/ping'), ['GET /ping/']);
++  assert.deepEqual(unguardedRoutes(fakeRouter({ handle: gate('audit:read') }, route('get', '/a', plain), route('get', '/b', plain))), [], 'router.use(requirePermission(...)) guards what follows');
++  assert.deepEqual(unguardedRoutes(fakeRouter(route('get', '/before', plain), { handle: gate('audit:read') }, route('get', '/after', plain))), ['GET /before'], 'a gate added later does not cover earlier routes');
++  assert.deepEqual(unguardedRoutes(fakeRouter({ handle: plain }, route('get', '/a', plain))), ['GET /a'], 'an ordinary middleware is not a gate');
++  assert.deepEqual(unguardedRoutes(fakeRouter({ name: 'router', handle: fakeRouter(route('get', '/in', plain)) }), '/nested'), ['GET /nested/in']);
++  assert.deepEqual(unguardedRoutes(fakeRouter({ handle: gate('users:read') }, { name: 'router', handle: fakeRouter(route('get', '/in', plain)) })), [], 'a parent gate covers a nested router');
++  assert.deepEqual(unguardedRoutes(undefined), []); assert.deepEqual(unguardedRoutes(fakeRouter({ route: { path: '/all', methods: {}, stack: [{ handle: plain }] } })), ['ANY /all']);
++});
++const withRouteFiles = files => { const d = mkdtempSync(path.join(tmpdir(), 'adm-')); for (const [n, c] of Object.entries(files)) writeFileSync(path.join(d, n), c); return d; };
++const R = (mount, body = 'export default { stack: [] };') => `export const mount = '${mount}'; ${body}`;
++test('admin loader: loads every route file in name order, insists on default router + mount, refuses duplicates', async () => {
++  const d = withRouteFiles({ 'b.js': R('/b'), 'a.js': R('/a'), 'notes.txt': 'ignored' });
++  assert.deepEqual((await loadAdminRoutes(d)).map(r => [r.file, r.mount]), [['a.js', '/a'], ['b.js', '/b']]);
++  await assert.rejects(() => loadAdminRoutes(withRouteFiles({ 'x.js': 'export default { stack: [] };' })), /must export a default router and const mount/);
++  await assert.rejects(() => loadAdminRoutes(withRouteFiles({ 'x.js': "export const mount = 'no-slash'; export default {};" })), /must export/); await assert.rejects(() => loadAdminRoutes(withRouteFiles({ 'x.js': "export const mount = '/a/b'; export default {};" })), /must export/);
++  await assert.rejects(() => loadAdminRoutes(withRouteFiles({ 'x.js': "export const mount = '/a';" })), /must export/);
++  await assert.rejects(() => loadAdminRoutes(withRouteFiles({ 'x.js': R('/same'), 'y.js': R('/same') })), /used twice/);
++});
++test('makeAdminRouter: refuses to build with an unguarded route; otherwise auth, staff and the rate limiter come first, then each mount, then a JSON 404', async () => {
++  const bad = withRouteFiles({ 'open.js': `import {} from 'node:fs'; export const mount='/open'; export default { stack: [{ route: { path: '/', methods: { get: true }, stack: [{ handle(){} }] } }] };` });
++  const calls = [], Router = () => ({ use: (...a) => calls.push(a) }), deps = { Router, requireAuth: () => 'A', requireStaff: () => 'S', limiter: () => 'L' };
++  await assert.rejects(() => makeAdminRouter({ ...deps, dir: bad }), /admin routes without requirePermission: GET \/open\//);
++  const good = withRouteFiles({ 'one.js': `export const mount='/one'; export default { stack: [{ route: { path: '/', methods: { get: true }, stack: [{ handle: Object.assign(()=>{}, { permission: 'users:read' }) }] } }] };`, 'two.js': R('/two') });
++  const r = await makeAdminRouter({ ...deps, dir: good }); assert.ok(r && calls.length === 4);
++  assert.deepEqual(calls[0].map(f => f()), ['A', 'S', 'L'], 'auth, then staff, then the limiter'); assert.equal(calls[1][0], '/one'); assert.equal(calls[2][0], '/two');
++  const out = res(); calls[3][0]({}, out); assert.deepEqual([out.code, out.body], [404, { error: 'not found' }]);
++  assert.deepEqual(unguardedIn(await loadAdminRoutes(good)), []);
++});
++test('the repo\'s own admin routes: every file under src/admin/routes uses requirePermission, the demo route is users:read at /ping', async () => {
++  const { readdirSync } = await import('node:fs');
++  for (const f of readdirSync(new URL('../src/admin/routes/', import.meta.url)).filter(x => x.endsWith('.js'))) { const s = src('src/admin/routes/' + f); assert.match(s, /requirePermission\(['"][a-z]+:[a-z]+['"]\)/, f); assert.match(s, /export const mount\s*=\s*['"]\/[a-z0-9-]+['"]/, f); assert.match(s, /export default/, f); }
++  const ping = src('src/admin/routes/ping.js'); assert.match(ping, /mount='\/ping'/); assert.match(ping, /r\.get\('\/',requirePermission\('users:read'\)/);
++  const idx = src('src/admin/index.js'); assert.match(idx, /r\.use\(requireAuth, requireStaff, limiter\)/); assert.match(idx, /windowMs: 60000/); assert.match(idx, /recordSecurityEvent\('rate_limit'\)/);
++  const chk = src('scripts/check-admin-guards.js'); assert.match(chk, /process\.exit\(1\)/); assert.ok(!/^#!/.test(chk), 'no shell script: runs with plain node on Windows'); assert.match(src('package.json'), /"check:admin":"node scripts\/check-admin-guards\.js"/);
++});
++
++// ---------- GET /api/me ----------
++test('GET /api/me: id, email, name, role and the permission list; no secrets; a missing profile table is not an error', async () => {
++  const mk = rows => makeMe({ q: async (sql, p) => { assert.match(sql, /FROM business_profile WHERE user_id=\$1/); assert.deepEqual(p, ['u1']); if (rows instanceof Error) throw rows; return rows; } });
++  let r = res(); await mk([{ display_name: 'Sam' }])({ user: { id: 'u1', email: 'a@x.com', role: 'admin', status: 'active', token_version: 3, pass_hash: 'x' } }, r);
++  assert.deepEqual(Object.keys(r.body).sort(), ['permissions', 'user']); assert.deepEqual(r.body.user, { id: 'u1', email: 'a@x.com', name: 'Sam', role: 'admin' }); assert.deepEqual(r.body.permissions, permissionsFor('admin')); assert.ok(!JSON.stringify(r.body).includes('token_version'));
++  r = res(); await mk([])({ user: { id: 'u1', email: 'a@x.com', role: 'user' } }, r); assert.deepEqual([r.body.user.name, r.body.permissions], [null, []]);
++  r = res(); await mk(Object.assign(new Error('relation does not exist'), { code: '42P01' }))({ user: { id: 'u1', email: 'a@x.com', role: 'owner' } }, r); assert.equal(r.body.user.name, null); assert.equal(r.body.permissions.length, PERMISSIONS.length);
++  await assert.rejects(() => mk(new Error('db down'))({ user: { id: 'u1', email: 'e', role: 'user' } }, res()), /db down/);
++});
++
++// ---------- migration ----------
++test('migration schema.rbac.sql: idempotent DDL, the columns, append-only audit_log, seeds that never overwrite', () => {
++  const s = src('db/schema.rbac.sql'), code = s.replace(/--.*$/gm, '');
++  for (const c of ["role text NOT NULL DEFAULT 'user' CHECK (role IN ('user','support','admin','owner'))", "status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended'))", 'token_version int NOT NULL DEFAULT 0', 'last_active_at timestamptz']) assert.ok(code.includes('ALTER TABLE users ADD COLUMN IF NOT EXISTS ' + c), c);
++  for (const t of ['audit_log', 'plans', 'usage_events', 'feature_flags']) assert.match(code, new RegExp('CREATE TABLE IF NOT EXISTS ' + t + '\\('), t);
++  assert.ok(!/CREATE TABLE(?! IF NOT EXISTS)/.test(code) && !/CREATE (UNIQUE )?INDEX(?! IF NOT EXISTS)/.test(code), 'every CREATE is IF NOT EXISTS'); assert.ok(!/DROP TABLE|DROP COLUMN|TRUNCATE TABLE/i.test(code));
++  const audit = code.slice(code.indexOf('CREATE TABLE IF NOT EXISTS audit_log'), code.indexOf(');', code.indexOf('CREATE TABLE IF NOT EXISTS audit_log')));
++  for (const col of ['actor_id uuid', 'actor_role text', 'org_id uuid', 'action text NOT NULL', 'target_type text', 'target_id text', 'before jsonb', 'after jsonb', 'meta jsonb', 'ip text', 'created_at timestamptz NOT NULL DEFAULT now()']) assert.ok(audit.includes(col), col);
++  assert.ok(!/REFERENCES/.test(audit), 'no foreign keys: deleting a user must never touch an audit row');
++  for (const i of ['audit_log_actor ON audit_log(actor_id', 'audit_log_org ON audit_log(org_id', 'audit_log_target ON audit_log(target_type, target_id)', 'audit_log_created ON audit_log(created_at DESC)']) assert.ok(code.includes(i), i);
++  assert.match(code, /BEFORE UPDATE OR DELETE ON audit_log FOR EACH ROW EXECUTE FUNCTION audit_log_append_only\(\)/); assert.match(code, /RAISE EXCEPTION 'audit_log is append-only/); assert.match(code, /BEFORE TRUNCATE ON audit_log/);
++  assert.match(code, /DROP TRIGGER IF EXISTS audit_log_no_change ON audit_log;\s*CREATE TRIGGER audit_log_no_change/, 're-runnable trigger');
++  assert.match(code, /INSERT INTO plans\(name,daily_images,daily_chat\) VALUES \('free',5,30\),\('pro',50,300\),\('unlimited',NULL,NULL\) ON CONFLICT \(name\) DO NOTHING/);
++  assert.match(code, /INSERT INTO feature_flags\(key,value\) VALUES \('ai_enabled','true'\),\('image_generation_enabled','true'\),\('maintenance_mode','false'\),\('announcement','null'\) ON CONFLICT \(key\) DO NOTHING/);
++  for (const ins of code.match(/INSERT INTO[^;]+;/g)) assert.match(ins, /ON CONFLICT[^;]*DO NOTHING/, 'seed never overwrites an admin\'s change');
++  assert.match(code, /usage_events\([^;]*user_id uuid REFERENCES users ON DELETE CASCADE[^;]*cost_estimate_usd numeric[^;]*provider text, meta jsonb/); assert.match(code, /CREATE INDEX IF NOT EXISTS usage_events_user ON usage_events\(user_id, created_at\)/);
++  for (const c of ["moderation_status text NOT NULL DEFAULT 'ok'", 'removed_at timestamptz', 'removed_by uuid', 'removed_reason text']) { assert.ok(code.includes('ALTER TABLE stored_images ADD COLUMN IF NOT EXISTS ' + c), c); assert.ok(code.includes('ALTER TABLE generated_images ADD COLUMN IF NOT EXISTS ' + c), 'generated_images ' + c); }
++  assert.match(code, /IF to_regclass\('generated_images'\) IS NOT NULL THEN/);
++  const mig = src('src/migrate.js'); assert.match(mig, /'schema\.sql',\.\.\.fs\.readdirSync\(dir\)\.filter\(f=>\/\^schema\\\..\+\\\.sql\$\/\.test\(f\)\)\.sort\(\)/); assert.match(src('db/schema.sql'), /CREATE TABLE IF NOT EXISTS stored_images/);
++});
++
++// ---------- wiring ----------
++test('auth.js: tokens carry tv, requireAuth is the DB-backed one, suspended users cannot log in, last_active_at is updated; register grants no role', () => {
++  const a = src('src/auth.js'); assert.match(a, /import \{signToken\} from '\.\/rbac\/token\.js'/); assert.match(a, /export const sign=signToken/); assert.match(a, /import \{requireAuth\} from '\.\/rbac\/middleware\.js'/); assert.match(a, /export \{requireAuth\}/);
++  assert.match(src('src/rbac/token.js'), /jwt\.sign\(makeClaims\(u\)/); assert.match(src('src/rbac/token.js'), /readClaims\(jwt\.verify/);
++  assert.match(a, /const blocked=loginBlock\(u\);if\(blocked\)return res\.status\(blocked\.status\)\.json\(\{error:blocked\.error\}\)/); assert.match(a, /UPDATE users SET last_active_at=now\(\) WHERE id=\$1/);
++  assert.ok(a.indexOf('bcrypt.compare') < a.indexOf('loginBlock(u)'), 'the password is checked before the suspension is revealed'); assert.ok(a.indexOf('loginBlock(u)') < a.indexOf('last_active_at'));
++  assert.match(a, /INSERT INTO users\(email,pass_hash,tos_accepted_at\) VALUES/); assert.ok(!/role/.test(a.slice(a.indexOf('/register'), a.indexOf('/login'))), 'no request can pick a role at signup');
++  assert.match(src('src/routes.js'), /import \{requireAuth\} from '\.\/auth\.js'/, 'routes.js is untouched and still finds requireAuth');
++});
++test('no request path grants admin or owner: users.role is written only by the OWNER_EMAIL bootstrap', async () => {
++  const { readdirSync, statSync } = await import('node:fs'); const files = []; const walk = d => { for (const f of readdirSync(new URL('../' + d, import.meta.url))) { const p = d + '/' + f; statSync(new URL('../' + p, import.meta.url)).isDirectory() ? walk(p) : p.endsWith('.js') && files.push(p); } }; walk('src');
++  const writers = files.filter(f => /UPDATE users SET[^;`'"]*\brole\b|INSERT INTO users\([^)]*\brole\b/.test(src(f)));
++  assert.deepEqual(writers, ['src/rbac/bootstrap.js']);
++});
++test('server.js: public router before auth, /api/me and /api/org behind requireAuth, /api/admin built from the guarded router, owner bootstrap, rate-limit blocks counted', () => {
++  const s = src('src/server.js'); const i = k => s.indexOf(k);
++  assert.match(s, /app\.use\('\/api\/public',publicRoutes\)/); assert.match(s, /app\.use\('\/api\/me',requireAuth,me\);app\.use\('\/api\/org',requireAuth,org\);app\.use\('\/api\/admin',await adminRouter\(\)\)/);
++  assert.ok(i("app.use('/api/public'") < i("app.use('/api',api)") && i("app.use('/api/admin'") < i("app.use('/api',api)"), 'specific mounts come before the catch-all /api router');
++  assert.match(s, /bootstrapOwner\(\);/); assert.match(s, /handler:\(_q,res,_n,o\)=>\{recordSecurityEvent\('rate_limit'\)/);
++  for (const f of ['src/routes/me.js', 'src/routes/org.js', 'src/routes/public.js']) assert.match(src(f), /export default/, f);
++  assert.match(src('src/routes/me.js'), /me\.get\('\/',/); assert.ok(!/\.(get|post|put|patch|delete)\(/.test(src('src/routes/org.js') + src('src/routes/public.js')), 'org and public are empty routers');
++});
++test('docs: OWNER_EMAIL is explained in the README and .env.example; npm scripts and tests are registered', () => {
++  for (const f of ['README.md', '.env.example']) { const t = src(f); assert.match(t, /OWNER_EMAIL/, f); assert.match(t, /sign up/i, f + ' says to sign up first'); assert.match(t, /restart/i, f + ' says to restart'); }
++  const pk = JSON.parse(src('package.json')); assert.equal(pk.scripts['check:admin'], 'node scripts/check-admin-guards.js'); assert.match(pk.scripts.test, /test\/rbacR0\.test\.js/); assert.match(pk.scripts.test, /test\/rbacR0Ui\.test\.js/);
++});
+diff --git a/test/rbacR0Ui.test.js b/test/rbacR0Ui.test.js
+new file mode 100644
+index 0000000..e98c9cc
+--- /dev/null
++++ b/test/rbacR0Ui.test.js
+@@ -0,0 +1,62 @@
++// R.0 frontend shell: pure helpers (web/src/admin/pure.ts, imported straight from the .ts file; skipped on a Node without type stripping)
++// plus source checks of App.tsx, AdminShell.tsx, useCan.ts and the page files. The React code has not run in a browser.
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { readFileSync, readdirSync } from 'node:fs';
++
++const web = p => readFileSync(new URL('../web/src/' + p, import.meta.url), 'utf8');
++let h = null; try { h = await import('../web/src/admin/pure.ts'); } catch { /* old Node without type stripping */ }
++const T = h ? test : test.skip;
++const me = (role, permissions) => ({ user: { id: 'u1', email: 'a@x.com', name: null, role }, permissions });
++
++T('canFrom / useCan logic: platform and organization permissions come from the same list; nothing asked = allowed; signed out = nothing', () => {
++  const m = me('admin', ['users:read', 'org.members.read']);
++  assert.equal(h.canFrom(m, 'users:read'), true); assert.equal(h.canFrom(m, 'org.members.read'), true, 'an org permission works the same way'); assert.equal(h.canFrom(m, 'users:delete'), false);
++  assert.equal(h.canFrom(m, undefined), true); assert.equal(h.canFrom(m, ''), true); assert.equal(h.canFrom(null, 'users:read'), false); assert.equal(h.canFrom(undefined, 'x'), false); assert.equal(h.canFrom({ user: {}, permissions: undefined }, 'x'), false);
++});
++T('isStaffMe: support, admin and owner only', () => {
++  for (const [role, want] of [['user', false], ['support', true], ['admin', true], ['owner', true], ['org_admin', false], ['', false]]) assert.equal(h.isStaffMe(me(role, [])), want, role);
++  assert.equal(h.isStaffMe(null), false); assert.equal(h.isStaffMe(undefined), false);
++});
++T('page discovery: slug from the file name, sorted by meta.order then title, hidden without the permission', () => {
++  assert.equal(h.slugOf('./pages/Overview.jsx'), 'overview'); assert.equal(h.slugOf('./pages/AuditLog.jsx'), 'audit-log'); assert.equal(h.slugOf('./pages/users.tsx'), 'users');
++  const pages = [{ slug: 'audit', title: 'Audit', permission: 'audit:read', order: 30 }, { slug: 'users', title: 'Users', permission: 'users:read', order: 10 }, { slug: 'overview', title: 'Overview', permission: 'system:read', order: 0 }, { slug: 'zeta', title: 'Zeta' }, { slug: 'alpha', title: 'Alpha' }];
++  assert.deepEqual(h.sortPages(pages).map(p => p.slug), ['overview', 'users', 'audit', 'alpha', 'zeta'], 'no order = last, then by title'); assert.equal(pages[0].slug, 'audit', 'input not mutated');
++  assert.deepEqual(h.visiblePages(pages, me('support', ['users:read', 'system:read'])).map(p => p.slug), ['overview', 'users', 'alpha', 'zeta'], 'audit hidden from support');
++  assert.deepEqual(h.visiblePages(pages, me('user', [])).map(p => p.slug), ['alpha', 'zeta'], 'only pages that ask for no permission'); assert.deepEqual(h.visiblePages(pages, null).map(p => p.slug), ['alpha', 'zeta']);
++});
++T('admin paths: /admin and /admin/<page> only; unknown or forbidden pages fall back to the first allowed one', () => {
++  for (const [p, want] of [['/admin', true], ['/admin/', true], ['/admin/users', true], ['/administrator', false], ['/', false], ['/adminx/users', false], ['/api/admin', false]]) assert.equal(h.isAdminPath(p), want, p);
++  assert.equal(h.adminPath(), '/admin'); assert.equal(h.adminPath('users'), '/admin/users'); assert.equal(h.slugFromPath('/admin/users'), 'users'); assert.equal(h.slugFromPath('/admin/users/42'), 'users'); assert.equal(h.slugFromPath('/admin/'), ''); assert.equal(h.slugFromPath('/x'), '');
++  const pages = [{ slug: 'overview', title: 'O', permission: 'system:read', order: 0 }, { slug: 'audit', title: 'A', permission: 'audit:read', order: 30 }], sup = me('support', ['system:read']), adm = me('admin', ['system:read', 'audit:read']);
++  assert.equal(h.currentPage(pages, adm, '/admin/audit').slug, 'audit'); assert.equal(h.currentPage(pages, sup, '/admin/audit').slug, 'overview', 'support cannot open audit: falls back'); assert.equal(h.currentPage(pages, adm, '/admin').slug, 'overview'); assert.equal(h.currentPage(pages, adm, '/admin/nope').slug, 'overview');
++  assert.equal(h.currentPage(pages, me('user', []), '/admin'), null); assert.equal(h.currentPage([], adm, '/admin'), null);
++});
++
++const APP = web('App.tsx'), SHELL = web('admin/AdminShell.tsx'), CAN = web('admin/useCan.ts'), OV = web('admin/pages/Overview.jsx');
++test('App.tsx: the admin shell is lazy-loaded (its own chunk), only staff see the Admin entry, /admin is opened and left through the history API', () => {
++  assert.match(APP, /const AdminShell = lazy\(\(\)=>import\('\.\/admin\/AdminShell'\)\)/); assert.ok(!/import AdminShell/.test(APP) && !/from '\.\/admin\/AdminShell'/.test(APP), 'no static import of the shell');
++  assert.ok(!/from '\.\/admin\/pages|import\.meta\.glob/.test(APP), 'App never pulls admin pages');
++  assert.match(APP, /\{isStaffMe\(me\)&&<button className="navb sm" onClick=\{\(\)=>\{history\.pushState\(null,'','\/admin'\);setAdminMode\(true\)\}\}>.*Admin<\/button>\}/);
++  assert.match(APP, /const \{me\} = useMe\(t\)/); assert.match(APP, /isAdminPath\(location\.pathname\)/); assert.match(APP, /addEventListener\('popstate',f\)/);
++  assert.match(APP, /if\(adminMode\)return <Suspense fallback=.*><AdminShell onExit=/s);
++  assert.ok(APP.indexOf('if(!t) return <Login') < APP.indexOf('if(adminMode)return') && APP.indexOf("ob==='needed'") < APP.indexOf('if(adminMode)return'), 'a signed-out or not-yet-onboarded person never reaches /admin');
++  assert.ok(APP.indexOf('useMe(t)') < APP.indexOf('if(!t) return <Login') && APP.indexOf('const [adminMode') < APP.indexOf('if(!t) return <Login'), 'hooks stay before the early returns');
++  assert.match(APP, /\{cc \? <CommandCenter\/> : <P go=\{go\}\/>\}/, 'the stream-6 hash router and the Command Center mounting are unchanged');
++});
++test('AdminShell: pages auto-discovered from ./pages/*.jsx, sorted and permission-filtered, non-staff are sent back, existing theme classes and icons only', () => {
++  assert.match(SHELL, /import\.meta\.glob\('\.\/pages\/\*\.jsx',\{eager:true\}\)/); assert.match(SHELL, /visiblePages\(PAGES,me\)/); assert.match(SHELL, /currentPage\(PAGES,me,path\)/);
++  assert.match(SHELL, /useEffect\(\(\)=>\{if\(!loading&&!isStaffMe\(me\)\)onExit\(\)\},\[loading,me\]\)/); assert.match(SHELL, /if\(loading\|\|!isStaffMe\(me\)\)return/);
++  assert.match(SHELL, /history\.pushState\(null,'',adminPath\(slug\)\)/); assert.match(SHELL, /addEventListener\('popstate'/);
++  for (const c of ['shell nav-open', 'className="side"', 'className="nav"', 'className="navb"', 'className="ctr"', 'className="tb"', 'className="page"']) assert.ok(SHELL.includes(c), c);
++  assert.ok(!/#[0-9a-fA-F]{3,8}\b|rgb\(/.test(SHELL), 'no hard-coded colours: the app\'s theme variables via its classes'); assert.match(SHELL, /name="chevLeft"/);
++  assert.match(web('icons.tsx'), /\n  chevLeft: '/, 'the icon the shell uses exists');
++});
++test('useCan reads GET /api/me once per sign-in and works for any permission name', () => {
++  assert.match(CAN, /api<Me>\('\/me'\)/); assert.match(CAN, /cache\.t!==t/); assert.match(CAN, /export function useCan\(perm:string\):boolean\{const \{me\}=useMe\(\);return canFrom\(me,perm\)\}/); assert.match(CAN, /p\.catch\(\(\)=>\{if\(cache&&cache\.p===p\)cache=null\}\)/);
++});
++test('page files follow the contract: default component + meta {title, permission, order}; the placeholder needs only system:read', () => {
++  const dir = new URL('../web/src/admin/pages/', import.meta.url), files = readdirSync(dir).filter(f => /\.jsx$/.test(f)); assert.ok(files.includes('Overview.jsx'));
++  for (const f of files) { const s = readFileSync(new URL(f, dir), 'utf8'); assert.match(s, /export const meta = \{ title: '[^']+', permission: '[a-z.:_]+', order: \d+ \}/, f); assert.match(s, /export default function/, f); }
++  assert.match(OV, /permission: 'system:read'/); assert.match(OV, /api\('\/admin\/ping'\)/);
++});
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+index a204a4d..21311a6 100644
+--- a/web/src/App.tsx
++++ b/web/src/App.tsx
+@@ -1,4 +1,4 @@
+-import {useState,useEffect} from 'react';
++import {useState,useEffect,lazy,Suspense} from 'react';
+ import type {ComponentType} from 'react';
+ import {tok,api} from './api';
+ import Login from './pages/Login';
+@@ -20,6 +20,10 @@ import type {IconName} from './icons';
+ import {IgBadge} from './pages/InstagramCard';
+ import {parseIgRedirect} from './ig';
+ import {pageFromHash,hashForPage} from './albums/router';
++import {useMe} from './admin/useCan';
++import {isStaffMe,isAdminPath} from './admin/pure';
++
++const AdminShell = lazy(()=>import('./admin/AdminShell')); // its own chunk: only staff who open /admin download it
+ 
+ const IGR = parseIgRedirect();
+ 
+@@ -68,6 +72,9 @@ export default function App(){
+   const [name,setName] = useState('');
+   const [dk,setDk] = useState(()=>localStorage.getItem('theme') ? localStorage.getItem('theme')==='dark' : matchMedia('(prefers-color-scheme:dark)').matches);
+   const notif = useNotifications(!!t&&ob==='ok');
++  const {me} = useMe(t); // GET /api/me once per sign-in: decides whether the Admin entry shows
++  const [adminMode,setAdminMode] = useState(()=>isAdminPath(location.pathname));
++  useEffect(()=>{const f=()=>setAdminMode(isAdminPath(location.pathname));addEventListener('popstate',f);return()=>removeEventListener('popstate',f)},[]);
+ 
+   useEffect(()=>{document.documentElement.dataset.theme = dk ? 'dark' : 'light';localStorage.setItem('theme', dk ? 'dark' : 'light')},[dk]);
+   useEffect(()=>{if(IGR)history.replaceState(null,'',location.pathname)},[]);
+@@ -101,6 +108,8 @@ export default function App(){
+   if(ob==='loading') return <div className="st" style={{margin:24}}>Loading…</div>;
+   if(ob==='needed') return <Onboarding igMsg={igMsg} onDone={()=>setOb('ok')}/>;
+ 
++  if(adminMode)return <Suspense fallback={<div className="st" style={{margin:24}}>Loading…</div>}><AdminShell onExit={()=>{history.pushState(null,'','/'+location.search+hashForPage(p));setAdminMode(false)}}/></Suspense>;
++
+   const P=PAGES[p], cc=p==='Dashboard', logout=()=>{localStorage.removeItem('t');setT('')};
+   // Every in-app page change goes through go(): it sets the page and keeps the address bar's hash in step (replaceState: no hashchange, no extra history entry).
+   const go=(page:string)=>{
+@@ -124,6 +133,7 @@ export default function App(){
+         {item({label:'Settings',page:'Settings',icon:'settings'})}
+         <button className="navb prof" aria-current={p==='Settings'?'page':undefined} onClick={()=>go('Settings')}>
+           <span className="rg"><i>{name?name[0].toUpperCase():<Icon name="user" size={20}/>}</i></span>{name||'Profile'}</button>
++        {isStaffMe(me)&&<button className="navb sm" onClick={()=>{history.pushState(null,'','/admin');setAdminMode(true)}}><Icon name="settings" size={20}/>Admin</button>}
+         <button className="navb out" onClick={logout}><Icon name="logout"/>Logout</button>
+       </div>
+     </aside>
+diff --git a/web/src/admin/AdminShell.tsx b/web/src/admin/AdminShell.tsx
+new file mode 100644
+index 0000000..193780b
+--- /dev/null
++++ b/web/src/admin/AdminShell.tsx
+@@ -0,0 +1,38 @@
++// R.0: the admin area (/admin). Loaded lazily by App.tsx, so customers never download it. Pages are discovered automatically from ./pages/*.jsx:
++// each exports a default component and `export const meta = { title, permission, order }`; the sidebar hides pages the person lacks the permission for.
++import {useState,useEffect} from 'react';
++import type {ComponentType} from 'react';
++import {Icon} from '../icons';
++import {useMe} from './useCan';
++import {slugOf,visiblePages,currentPage,adminPath,isAdminPath,isStaffMe} from './pure';
++import type {AdminPage} from './pure';
++
++type Loaded=AdminPage&{Component:ComponentType<any>};
++const mods=import.meta.glob('./pages/*.jsx',{eager:true}) as Record<string,{default?:ComponentType<any>;meta?:{title:string;permission?:string;order?:number}}>;
++const PAGES:Loaded[]=Object.entries(mods).filter(([,m])=>m.default&&m.meta).map(([file,m])=>({slug:slugOf(file),...m.meta!,Component:m.default!}));
++
++export default function AdminShell({onExit}:{onExit:()=>void}){
++  const {me,loading}=useMe();
++  const [path,setPath]=useState(location.pathname);
++  useEffect(()=>{const f=()=>setPath(location.pathname);addEventListener('popstate',f);return()=>removeEventListener('popstate',f)},[]);
++  useEffect(()=>{if(!loading&&!isStaffMe(me))onExit()},[loading,me]); // non-staff (or a failed /me) are sent back to the app
++
++  if(loading||!isStaffMe(me))return <div className="st" style={{margin:24}}>Loading…</div>;
++  const pages=visiblePages(PAGES,me),page=currentPage(PAGES,me,path),Page=page?.Component;
++  const open=(slug:string)=>{history.pushState(null,'',adminPath(slug));setPath(adminPath(slug))};
++  return <div className="shell nav-open">
++    <aside className="side" aria-label="Admin sidebar">
++      <div className="side-top"><span className="wm">Admin</span></div>
++      <nav className="nav" aria-label="Admin pages">
++        {pages.map(p=><button key={p.slug} className="navb" aria-current={page?.slug===p.slug?'page':undefined} onClick={()=>open(p.slug)}>{p.title}</button>)}
++      </nav>
++      <div className="sidefoot">
++        <button className="navb" onClick={onExit}><Icon name="chevLeft"/>Back to app</button>
++      </div>
++    </aside>
++    <main className="ctr">
++      <header className="tb"><div className="barl"><span className="mu">{me!.user.email} · {me!.user.role}</span></div></header>
++      <div className="page">{Page?<Page/>:<div className="st">No admin pages are available for your role.</div>}</div>
++    </main>
++  </div>;
++}
+diff --git a/web/src/admin/pages/Overview.jsx b/web/src/admin/pages/Overview.jsx
+new file mode 100644
+index 0000000..d03af2b
+--- /dev/null
++++ b/web/src/admin/pages/Overview.jsx
+@@ -0,0 +1,13 @@
++// Placeholder landing page of the admin area. Real pages (users, organizations, audit...) are added by later phases as more files in this folder.
++import {useEffect,useState} from 'react';
++import {api} from '../../api';
++export const meta = { title: 'Overview', permission: 'system:read', order: 0 };
++export default function Overview() {
++  const [ping, setPing] = useState(null), [err, setErr] = useState('');
++  useEffect(() => { api('/admin/ping').then(setPing).catch(e => setErr(e.message)); }, []);
++  return <div className="card full">
++    <h3>Admin overview</h3>
++    <p className="mu">The admin tools are being built in phases. This page confirms the admin API is reachable and that your role may use it.</p>
++    {err ? <div className="st dn">⚠ {err}</div> : ping ? <div className="st">Admin API reachable. You are signed in as <b>{ping.role}</b>.</div> : <div className="st">Checking the admin API…</div>}
++  </div>;
++}
+diff --git a/web/src/admin/pure.ts b/web/src/admin/pure.ts
+new file mode 100644
+index 0000000..c6edabc
+--- /dev/null
++++ b/web/src/admin/pure.ts
+@@ -0,0 +1,28 @@
++// R.0 admin shell helpers. Pure (no React, no window) so test/rbacR0Ui.test.js can import them in Node. Only erasable TypeScript syntax, no imports.
++export type Me = { user: { id: string; email: string; name: string | null; role: string }; permissions: string[] };
++export type PageMeta = { title: string; permission?: string; order?: number };
++export type AdminPage = PageMeta & { slug: string };
++
++export const STAFF_ROLES = ['support', 'admin', 'owner'];
++// Works for platform and organization permissions alike: GET /api/me lists every permission the person has. No permission asked = allowed.
++export const canFrom = (me: Me | null | undefined, perm?: string | null): boolean => !perm || !!me?.permissions?.includes(perm);
++export const isStaffMe = (me: Me | null | undefined): boolean => !!me && STAFF_ROLES.includes(me.user?.role);
++
++// './pages/Overview.jsx' -> 'overview'
++export const slugOf = (file: string): string => (file.split('/').pop() || '').replace(/\.[jt]sx?$/, '').replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
++// Sidebar order: meta.order ascending (missing = 100), then title.
++export function sortPages<T extends AdminPage>(pages: T[]): T[] {
++  return [...pages].sort((a, b) => (a.order ?? 100) - (b.order ?? 100) || a.title.localeCompare(b.title));
++}
++// Pages this person may open: the page is hidden when they lack its meta.permission.
++export const visiblePages = <T extends AdminPage>(pages: T[], me: Me | null | undefined): T[] => sortPages(pages).filter(p => canFrom(me, p.permission));
++
++export const isAdminPath = (pathname: string): boolean => pathname === '/admin' || pathname.startsWith('/admin/');
++export const adminPath = (slug?: string): string => (slug ? '/admin/' + slug : '/admin');
++// '/admin/users' -> 'users', '/admin' -> ''
++export const slugFromPath = (pathname: string): string => (isAdminPath(pathname) ? pathname.slice('/admin'.length).replace(/^\/+|\/+$/g, '').split('/')[0] : '');
++// The page to show: the one in the address if allowed, otherwise the first allowed page.
++export const currentPage = <T extends AdminPage>(pages: T[], me: Me | null | undefined, pathname: string): T | null => {
++  const ok = visiblePages(pages, me), want = slugFromPath(pathname);
++  return ok.find(p => p.slug === want) || ok[0] || null;
++};
+diff --git a/web/src/admin/useCan.ts b/web/src/admin/useCan.ts
+new file mode 100644
+index 0000000..4d10628
+--- /dev/null
++++ b/web/src/admin/useCan.ts
+@@ -0,0 +1,27 @@
++// R.0: who am I and what may I do, from GET /api/me. One request per sign-in, shared by every hook. useCan works for platform AND organization permissions.
++import {useState,useEffect} from 'react';
++import {api,tok} from '../api';
++import {canFrom} from './pure';
++import type {Me} from './pure';
++
++let cache:{t:string;p:Promise<Me>}|null=null;
++export function loadMe():Promise<Me>{
++  const t=tok();
++  if(!cache||cache.t!==t){const p=api<Me>('/me');cache={t,p};p.catch(()=>{if(cache&&cache.p===p)cache=null})} // a failed request is not remembered
++  return cache.p;
++}
++export const forgetMe=()=>{cache=null};
++
++// `key` changes when the person signs in or out (App passes its token), which reloads /me.
++export function useMe(key:string=tok()){
++  const [me,setMe]=useState<Me|null>(null),[loading,setLoading]=useState(!!key);
++  useEffect(()=>{
++    if(!key){setMe(null);setLoading(false);return}
++    let live=true;setLoading(true);
++    loadMe().then(m=>live&&setMe(m)).catch(()=>live&&setMe(null)).finally(()=>live&&setLoading(false));
++    return()=>{live=false};
++  },[key]);
++  return {me,loading};
++}
++// useCan('users:read') -> boolean (false while loading or signed out)
++export function useCan(perm:string):boolean{const {me}=useMe();return canFrom(me,perm)}

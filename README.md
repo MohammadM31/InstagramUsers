@@ -10,6 +10,17 @@ The API **exits at boot** with a clear message if these are missing or malformed
 
     node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"    # run twice: JWT_SECRET and ENCRYPTION_KEY
 
+## Platform roles and the owner account (R.0)
+Every user has a platform role: `user` (a normal customer), `support`, `admin` or `owner`. Staff open the admin area at `/admin` (the "Admin" entry appears at the bottom of the sidebar only for staff). **Nobody can sign up as staff.** The first owner is created like this:
+
+1. Sign up normally in the app with the email address you will use as owner.
+2. In `.env`, set `OWNER_EMAIL=` to exactly that email address.
+3. Restart the server. It logs `OWNER_EMAIL: ... is now the platform owner`. Restarting again changes nothing.
+
+If `OWNER_EMAIL` is empty the server logs a warning at every start and nobody can open `/admin`. If it is set but nobody has signed up with that email yet, the server logs that too and does nothing; sign up, then restart.
+
+`npm run migrate` now also applies `db/schema.rbac.sql` (and any other `db/schema.<name>.sql`). `npm run check:admin` fails if any admin route lacks a permission check. The `curl.exe` commands for these routes are in `docs/RBAC_R0.md`.
+
 ## Run with Docker
     cp .env.example .env     # set JWT_SECRET and ENCRYPTION_KEY
     docker compose up --build
