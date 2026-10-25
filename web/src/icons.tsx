@@ -20,6 +20,16 @@ const PATHS = {
   send: 'M22 2L11 13M22 2l-7 20-4-9-9-4z',
   trendUp: 'M7 17L17 7M8 7h9v9',
   trendDown: 'M7 7l10 10M17 8v9H8',
+  // Albums page (stream 6): photo-stack nav icon plus the small actions the page needs
+  albums: 'M3 7a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM21 8v10a3 3 0 0 1-3 3M3 16l4-4 4 4 3-3 4 4',
+  folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+  trash: 'M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M6 6l1 14a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-14M10 11v6M14 11v6',
+  check: 'M5 12l5 5L20 7',
+  chevLeft: 'M15 6l-6 6 6 6',
+  chevRight: 'M9 6l6 6-6 6',
+  search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-4.3-4.3',
+  edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
+  plus: 'M12 5v14M5 12h14',
   // Existing icons (names unchanged: Assistant, DashboardCards and the sidebar's "More" group look these up)
   menu: 'M3 6h18M3 12h18M3 18h18',
   mic: 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8',
