@@ -4,6 +4,7 @@ import {api} from './api';
 import {ICONS} from './icons';
 
 export type Prefill={id:number;text:string};
+export type DeepLink={id:number;conversationId:string;ref:string|null};
 
 type Msg =
   | { role:'user'; text:string }
@@ -32,12 +33,16 @@ export default function Assistant({
   isEmbedded = false,
   variant = 'float',
   prefill = null,
+  deepLink = null,
   onInteract,
+  onReset,
 }:{
   isEmbedded?: boolean;
   variant?: 'float' | 'page';
   prefill?: Prefill | null;
+  deepLink?: DeepLink | null;
   onInteract?: () => void;
+  onReset?: () => void;
 }){
   const [m,setM]=useState(''), [msgs,setMsgs]=useState<Msg[]>([]), [b,setB]=useState(false), [ref,setRef]=useState(''),
     f=useRef<HTMLInputElement>(null), seq=useRef(0);
@@ -59,6 +64,7 @@ export default function Assistant({
   const isPage = variant === 'page';
 
   useEffect(()=>{if(prefill){setM(prefill.text);onInteract?.()}},[prefill]); // eslint-disable-line
+  useEffect(()=>{ if(deepLink) onInteract?.(); },[deepLink]); // eslint-disable-line
   useEffect(()=>{if(threadRef.current)threadRef.current.scrollTop=threadRef.current.scrollHeight},[msgs]);
   // Safety net: Escape restores the hidden composer.
   useEffect(()=>{
@@ -112,7 +118,7 @@ export default function Assistant({
   };
 
   const go=(t:string)=>{setM(t);onInteract?.()};
-  const clearThread=()=>setMsgs([]);
+  const clearThread=()=>{ setMsgs([]); onReset?.(); };
 
   const onPointerDown=(e:React.PointerEvent<HTMLDivElement>)=>{
     if(isEmbedded||isPage)return;
