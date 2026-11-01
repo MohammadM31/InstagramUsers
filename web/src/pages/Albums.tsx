@@ -241,7 +241,7 @@ function ItemList({view,folders,onBack,refresh,notify}:{view:View;folders:Folder
         return <button key={it.id} className={'alb-card'+(on?' sel':'')} onClick={()=>selecting?toggle(it.id):setOpenId(it.id)}
           aria-pressed={selecting?on:undefined} aria-label={it.title+', '+(it.status==='ready'?'ready':'draft')+(selecting?(on?', selected':', not selected'):'')}>
           <span className="alb-thumb">
-            <Img id={it.imageIds?.[0]}/>
+            {it.cover ? <img className="alb-img" src={it.cover} alt=""/> : <Img id={it.imageIds?.[0]}/>}
             {n>1&&<span className="alb-multi" title={n+' images'}>{n}</span>}
             {selecting&&<span className={'alb-check'+(on?' on':'')}>{on&&<Icon name="check" size={14} sw={3}/>}</span>}
           </span>

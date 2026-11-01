@@ -7,7 +7,8 @@ export const GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook
 export const DIALOG_BASE = process.env.META_DIALOG_BASE || 'https://www.facebook.com';
 
 // Permissions requested at connect time (roadmap A.0). instagram_content_publish and Public Content Access are added later (C, B.2b).
-export const IG_SCOPES = ['instagram_basic', 'instagram_manage_insights', 'instagram_manage_comments', 'pages_show_list', 'pages_read_engagement'];
+// business_management is required for Pages owned by a Meta business. Without it, me/accounts returns an empty list (Graph API v17+).
+export const IG_SCOPES = ['instagram_basic', 'instagram_manage_insights', 'instagram_manage_comments', 'pages_show_list', 'pages_read_engagement', 'business_management'];
 
 // Retired metric names (roadmap section 5). A unit test fails if any of them appears in a list we request.
 export const BANNED_METRICS = ['impressions', 'plays', 'clips_replays_count', 'ig_reels_aggregated_all_plays_count', 'video_views'];

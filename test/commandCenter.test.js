@@ -1,6 +1,7 @@
 // Command Center helpers (web/src/cc.ts). Pure logic only; the React wiring is checked by rendering (see docs) and in a browser.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 let cc = null; try { cc = await import('../web/src/cc.ts'); } catch { /* old Node without type stripping */ }
 const T = cc ? test : test.skip;
 
@@ -59,4 +60,21 @@ T('scheduleBody: caption, valid future time, public URL only when it is http(s);
   for (const [c, w, msg] of [['', when, /caption/], ['   ', when, /caption/], ['x', '', /Pick a date/], ['x', 'not a date', /not valid/], ['x', '2020-01-01T00:00', /future/], ['a'.repeat(2201), when, /2,200/]])
     assert.match(cc.scheduleBody(c, w, null, now).error, msg);
   assert.equal(cc.scheduleBody('x', new Date(now - 30000).toISOString(), null, now).error, undefined, 'less than a minute in the past is tolerated');
+});
+
+// ---- Command Center page wiring (source checks: the React code has not run in a browser) ----
+const CCSRC = readFileSync(new URL('../web/src/pages/CommandCenter.tsx', import.meta.url), 'utf8');
+test('connection pill: sets location.hash=#settings and dispatches nav (App.tsx listens)', () => {
+  const g = CCSRC.slice(CCSRC.indexOf('const goSettings'));
+  assert.match(g, /location\.hash = '#settings'/); assert.match(g, /dispatchEvent\(new Event\('nav'\)\)/);
+  assert.ok(g.indexOf("location.hash = '#settings'") < g.indexOf("dispatchEvent(new Event('nav'))"), 'hash is set first, so a nav listener already sees it');
+  assert.match(CCSRC, /className="ccconn-pill" onClick=\{goSettings\}/);
+});
+test('deep link #cc=: read on mount / hashchange / nav, then cleared with history.replaceState', () => {
+  assert.match(CCSRC, /parseHash\(location\.hash\)/); assert.match(CCSRC, /addEventListener\('hashchange', read\)/); assert.match(CCSRC, /addEventListener\('nav', read\)/);
+  assert.match(CCSRC, /history\.replaceState\(/); assert.match(CCSRC, /<Assistant variant="page"[^>]*deepLink=\{deepLink\}/);
+});
+test('Command Center no longer relies on a sticky composer or a page-height thread', () => {
+  const css = readFileSync(new URL('../web/src/styles.css', import.meta.url), 'utf8');
+  assert.ok(!/\.assistant-page \.page-bar\{[^}]*sticky/.test(css)); assert.ok(!/min-height:calc\(100vh - 120px\)/.test(css));
 });

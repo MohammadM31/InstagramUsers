@@ -5,7 +5,7 @@ export type Status = 'draft' | 'ready';
 
 export interface Item {
   id: string; title: string; category: Category; categorySource: 'auto' | 'user'; status: Status; caption: string;
-  imageIds: string[]; ratio: string | null; folderId: string | null; conversationId: string | null; createdAt: string; updatedAt: string;
+  imageIds: string[]; ratio: string | null; folderId: string | null; conversationId: string | null; cover?: string | null; createdAt: string; updatedAt: string;
 }
 export interface AlbumSummary { category: Category; count: number; coverImageIds: string[] }
 export interface FolderSummary { id: string; name: string; count: number; coverImageIds: string[] }

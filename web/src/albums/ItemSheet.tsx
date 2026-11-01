@@ -10,7 +10,7 @@ import {ccHash} from './hash';
 
 // Large preview. Only the image on screen is fetched in full (GET /api/images/:id); the thumbnail sits underneath as the placeholder.
 // More than one image: arrow buttons, ArrowLeft/ArrowRight on the focused gallery, swipe on touch screens, and dots.
-function Gallery({ids,ratio,title}:{ids:string[];ratio:string|null;title:string}){
+function Gallery({ids,ratio,title,cover}:{ids:string[];ratio:string|null;title:string;cover?:string|null}){
   const [i,setI]=useState(0);
   const [st,setSt]=useState<{id:string;url?:string;err?:string}>({id:''});
   const [nonce,setNonce]=useState(0);
@@ -28,7 +28,7 @@ function Gallery({ids,ratio,title}:{ids:string[];ratio:string|null;title:string}
     }
     return()=>{live=false};
   },[id,nonce]);
-  if(!id)return <div className="alb-gal"><div className="alb-stage" style={{aspectRatio:ratioCss(ratio)}}><span className="alb-img none"><Icon name="content" size={28}/></span></div></div>;
+  if(!id)return <div className="alb-gal"><div className="alb-stage" style={{aspectRatio:ratioCss(ratio)}}>{cover?<img className="alb-full" src={cover} alt={title} draggable={false}/>:<span className="alb-img none"><Icon name="content" size={28}/></span>}</div></div>;
   const shown=st.id===id?st:{id} as {id:string;url?:string;err?:string};
   return <div className="alb-gal" tabIndex={0} aria-roledescription="carousel" aria-label={title+', image '+(cur+1)+' of '+n}
     onKeyDown={e=>{if(e.key==='ArrowLeft'){e.preventDefault();step(-1)}else if(e.key==='ArrowRight'){e.preventDefault();step(1)}}}
@@ -73,7 +73,7 @@ export default function ItemSheet({item,folders,onClose,onPatch,onDelete}:{item:
     <div className="alb-sheet">
       <div className="alb-sheet-head"><span className="mu">Saved {new Date(item.createdAt).toLocaleDateString()}</span><CloseBtn onClick={onClose}/></div>
       <div className="alb-sheet-body">
-        <Gallery ids={item.imageIds||[]} ratio={item.ratio} title={item.title}/>
+        <Gallery ids={item.imageIds||[]} ratio={item.ratio} title={item.title} cover={item.cover}/>
         <div className="alb-form">
           <label className="alb-field"><span>Title</span>
             <input value={title} maxLength={120} onChange={e=>setTitle(e.target.value)} onBlur={saveTitle} onKeyDown={e=>{if(e.key==='Enter')(e.target as HTMLInputElement).blur()}}/></label>

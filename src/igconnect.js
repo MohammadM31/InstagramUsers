@@ -11,7 +11,7 @@ export const CONNECT_ERRORS = {
   not_configured: 'Instagram connection is not set up on this server (META_APP_ID, META_APP_SECRET and META_REDIRECT_URI are missing).',
   state_invalid: 'The connection attempt expired or was not started from this app. Please try again.',
   declined: 'You declined the permissions. Instagram data cannot be read without them.',
-  no_page: 'No Facebook Page was found. Instagram professional accounts must be linked to a Facebook Page you manage.',
+  no_page: 'No Facebook Page was returned for the Facebook account you logged in with. Use the profile that manages the Page, and allow access to the business that owns it.',
   wrong_type: 'None of your Pages has an Instagram professional (Business or Creator) account linked. Switch the account to professional in Instagram settings and link it to a Page.',
   missing_permissions: 'Some required permissions were not granted. Connect again and keep every box ticked.',
   token_error: 'Instagram did not accept the login. Please try again.',
@@ -82,10 +82,10 @@ export function makeIgConnect({ q, graph, state, keys, env = process.env, now = 
       const short = await exchangeCode(graph, { ...c, code: String(code) });
       const long = await exchangeLongLived(graph, { ...c, token: short.access_token });
       const token = long.access_token || short.access_token;
-      const acct = pickAccount(await listPagesWithIg(graph, token));
       const granted = await grantedScopes(graph, token).catch(() => []);
       const lacking = missingScopes(granted);
       if (granted.length && lacking.length) throw new ConnectError('missing_permissions', lacking);
+      const acct = pickAccount(await listPagesWithIg(graph, token));
       const fbUser = (await graph.get('me', { fields: 'id' }, token).catch(() => null))?.id ?? null; // identifies the person in Meta's deauthorize / deletion callbacks
       await keys.set(uid, 'instagram', token);
       await q(`INSERT INTO ig_accounts(user_id,ig_user_id,page_id,username,account_type,scopes,token_expires_at,status,followers_at_connect,last_error,connected_at,fb_user_id)

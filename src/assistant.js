@@ -5,6 +5,8 @@ import { advise, health, financePlan } from './advisor.js';
 import { llmConfig, llmChat } from './keys.js';
 import { hit } from './ratelimit.js';
 import { currentVoice, voiceInstruction } from './brandvoice.js'; // O.3: the saved brand voice shapes the wording of the reply
+import { makeAlbums, coverOf } from './albums.js';
+import { summarizePage, captionFromPage, hasWork, localOpinion, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, categoryNamed, affirmsCreate } from './pageactions.js';
 
 const ER = '(coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))';
 const L30 = "posted_at>now()-interval '30 days'";
@@ -50,12 +52,13 @@ const amount = t => Number(t.match(/\$?\s?(\d[\d,]*)/)?.[1]?.replace(/,/g, '')) 
 
 // Intent router. With LLM_API_KEY set (Gemini, DeepSeek or OpenAI via an OpenAI-compatible endpoint) the model sees the
 // page's live metrics and picks ONE action plus a short reply. Without a key, or on any failure, regex rules decide.
-async function route(text, m, tips, uid) {
+async function route(text, m, tips, uid, pageSummary = '') {
   const cfg = await llmConfig(uid); // 0.4: user's stored key first, env fallback
   if (cfg) try {
     const voice = voiceInstruction(await currentVoice(q, uid).catch(() => null)); // '' when none
     const j = await llmChat(cfg, { response_format: { type: 'json_object' }, messages: [
         { role: 'system', content: `You are the assistant inside an Instagram growth tool. You know this page's live state:\n${JSON.stringify({ metrics: m, health: health(m), priorities: tips.slice(0, 4).map(t => t.text) })}\n` +
+          (pageSummary ? `What the user currently has on screen:\n${pageSummary}\nWhen they say "this", "current", or "these", talk about that work.\n` : '') +
           `Pick ONE action for the user's request. Return JSON {"intent":"image|analytics|finance|tip|info","text":"","imagePrompt":"","capital":0}. ` +
           `"text" is at most 20 words, plain and brief, no greeting. Use intent "image" only if they want a picture made (put the visual in imagePrompt). "analytics" for performance/progress/page info, "finance" for budget or capital (put the amount in capital), "tip" for what to do next. ` +
           `When advising, prefer collaborations, mentions, reshares, giveaways and community over hashtags or posting more. Never invent numbers not in the state.` +
@@ -71,12 +74,89 @@ async function route(text, m, tips, uid) {
   return { intent: 'info' };
 }
 
+const draftFrom = page => ({
+  title: String(page?.prompt || page?.captions?.[0]?.hook || 'Saved from the assistant').slice(0, 140),
+  caption: captionFromPage(page),
+  ratio: page?.ratio || null,
+  cover: coverOf(page?.image) || coverOf(page?.imageUrl),
+});
+
+// Commands that change the app: schedule the current Posts work, or save it into an album.
+// Returns a response body, or null to let the normal reply run.
+async function pageCommand(req, text, page) {
+  const albums = makeAlbums({ q });
+  const last = [...(req.convo?.history || [])].reverse().find(m => m.role === 'assistant');
+  const pending = last?.data?.pendingFolder;
+  if (pending && affirmsCreate(text)) {
+    const folder = await albums.createFolder(req.uid, pending).catch(async e => e.status === 409 ? albums.findFolder(req.uid, pending) : Promise.reject(e));
+    const row = await albums.saveDraft(req.uid, { ...draftFrom(page), category: page?.ratio === '9:16' ? 'reel' : 'photo', folderId: folder.id });
+    return { type: 'info', text: `Created “${folder.name}” and saved the current work there.`, data: { folderId: folder.id, itemId: row.id } };
+  }
+  if (pending && categoryNamed(text)) {
+    const category = categoryNamed(text);
+    const row = await albums.saveDraft(req.uid, { ...draftFrom(page), category, folderId: null });
+    return { type: 'info', text: `Saved the current work into the ${category === 'reel' ? 'Reels' : category} album.`, data: { itemId: row.id } };
+  }
+  const ask = albumAsk(text);
+  if (ask) {
+    if (!hasWork(page)) return { type: 'info', text: 'There is nothing to save yet. Generate a caption, tags or an image on Posts, then ask again.', data: {} };
+    if (ask.kind === 'folder') {
+      const existing = await albums.findFolder(req.uid, ask.name);
+      if (!existing) {
+        const names = (await albums.listFolders(req.uid)).map(f => f.name);
+        const have = names.length ? ` You already have: ${names.join(', ')}.` : '';
+        return { type: 'info', text: `There is no folder named ${ask.name}. Should I create it, or save this into another album (Reels, Photos, Carousels, Stories)?${have}`, data: { pendingFolder: ask.name } };
+      }
+      const row = await albums.saveDraft(req.uid, { ...draftFrom(page), category: page?.ratio === '9:16' ? 'reel' : 'photo', folderId: existing.id });
+      return { type: 'info', text: `Saved the current work into ${existing.name}.`, data: { folderId: existing.id, itemId: row.id } };
+    }
+    const row = await albums.saveDraft(req.uid, { ...draftFrom(page), category: ask.category, folderId: null });
+    const label = ask.category === 'reel' ? 'Reels' : ask.category;
+    return { type: 'info', text: `Saved the current work into the ${label} album.`, data: { itemId: row.id } };
+  }
+  if (wantsSchedule(text)) {
+    const when = clockFromText(text);
+    if (!when) return { type: 'info', text: 'Tell me a time, for example “schedule it for 1pm today”.', data: {} };
+    const caption = captionFromPage(page);
+    if (!caption) return { type: 'info', text: 'Generate a caption, tags or an image on Posts first, then ask me to schedule it.', data: {} };
+    const image = typeof page?.imageUrl === 'string' && /^https?:\/\//.test(page.imageUrl) ? page.imageUrl : null;
+    const [row] = await q('INSERT INTO scheduled_posts(user_id,caption,image,platforms,scheduled_at) VALUES($1,$2,$3,$4,$5) RETURNING id', [req.uid, caption, image, ['instagram'], when]);
+    const whenLabel = new Date(when).toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric' });
+    const note = image ? '' : ' The picture is not a public link yet, so Instagram cannot publish it until storage is set up. The caption and tags are on the schedule.';
+    return { type: 'info', text: `Scheduled that post for ${whenLabel}. It is in Scheduling.${note}`, data: { scheduledId: row.id, scheduledAt: when } };
+  }
+  return null;
+}
+
 export async function assistant(req, res) {
   const text = String(req.body?.message || '').slice(0, 500);
   if (!text.trim()) return res.status(400).json({ error: 'message required' });
+  const page = req.body?.page && typeof req.body.page === 'object' ? req.body.page : null;
+  if (page || aboutCurrentWork(text) || wantsSchedule(text) || albumAsk(text)) {
+    try {
+      const done = await pageCommand(req, text, page);
+      if (done) return res.json(done);
+    } catch (e) {
+      if (e.code === '42P01') return res.json({ type: 'info', text: 'Albums are not ready yet. Restart the server so the database can update, then ask again.', data: {} });
+      console.error('page command', e.message);
+      return res.json({ type: 'info', text: 'I could not do that just now. ' + (e.message || 'Try again.'), data: {} });
+    }
+  }
+  if (aboutCurrentWork(text)) {
+    const local = localOpinion(page);
+    const cfg = await llmConfig(req.uid).catch(() => null);
+    if (cfg) try {
+      const j = await llmChat(cfg, { messages: [
+        { role: 'system', content: 'Comment on the user\'s current Instagram draft in at most 40 words. Use only the work described. Do not invent numbers.\n' + (summarizePage(page) || 'Nothing is on the page.') },
+        { role: 'user', content: text }] }, 20000);
+      const said = String(j.choices?.[0]?.message?.content || '').replace(/^["']|["']$/g, '').slice(0, 400);
+      if (said) return res.json({ type: 'info', text: said, data: {} });
+    } catch { /* the local comment still answers */ }
+    return res.json({ type: 'info', text: local, data: {} });
+  }
   const m = await pageMetrics(req.uid);
   const tips = advise(m);
-  const o = await route(text, m, tips, req.uid);
+  const o = await route(text, m, tips, req.uid, summarizePage(page));
   const say = (fallback) => (o.text && String(o.text).slice(0, 200)) || fallback;
 
   if (o.intent === 'image') {

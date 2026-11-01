@@ -22,6 +22,7 @@ import {parseIgRedirect} from './ig';
 import {pageFromHash,hashAfterNav,isEmptyHash} from './albums/hash';
 import {useMe} from './admin/useCan';
 import {isStaffMe,isAdminPath} from './admin/pure';
+import {setPageName} from './work';
 
 const AdminShell = lazy(()=>import('./admin/AdminShell'));
 
@@ -64,7 +65,7 @@ const MORE:NavItem[] = [
 
 export default function App(){
   const [t,setT] = useState(tok());
-  const [p,setP] = useState<string>(IGR ? 'Settings' : (pageFromHash(location.hash) ?? 'Dashboard'));
+  const [p,setP] = useState<string>(pageFromHash(location.hash) ?? 'Dashboard');
   const [igMsg,setIgMsg] = useState(IGR);
   const [navOpen, setNavOpen] = useState(true);
   const [ob,setOb] = useState<'loading'|'needed'|'ok'>('loading');
@@ -75,6 +76,7 @@ export default function App(){
   const [adminMode,setAdminMode] = useState(()=>isAdminPath(location.pathname));
 
   useEffect(()=>{document.documentElement.dataset.theme = dk ? 'dark' : 'light';localStorage.setItem('theme', dk ? 'dark' : 'light')},[dk]);
+  useEffect(()=>{const label=[...NAV,...MORE,{label:'Settings',page:'Settings'},{label:'Business',page:'Dashboard'}].find(n=>n.page===p)?.label||p;setPageName(label==='Dashboard'?'Business':label)},[p]);
   useEffect(()=>{if(IGR)history.replaceState(null,'',location.pathname)},[]);
   useEffect(()=>{localStorage.setItem('nav', navOpen?'open':'closed')},[navOpen]);
   useEffect(()=>{const f=()=>setAdminMode(isAdminPath(location.pathname));addEventListener('popstate',f);return()=>removeEventListener('popstate',f)},[]);
@@ -150,7 +152,8 @@ export default function App(){
       </header>
       <div className="page">
         {igMsg&&<div className={'banner '+(igMsg.ok?'ok':'bad')} role="status"><span>{igMsg.text}</span><button className="btn g s" onClick={()=>setIgMsg(null)}>Close</button></div>}
-        {cc ? <CommandCenter/> : <P go={go}/>}
+        <div style={cc ? undefined : {display:'none'}}><CommandCenter/></div>
+        {!cc && <P go={go}/>}
       </div>
     </main>
 

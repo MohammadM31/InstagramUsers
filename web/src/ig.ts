@@ -8,7 +8,7 @@ export const IG_REASONS:Record<string,string>={
  not_configured:'Instagram connection is not set up on this server yet.',
  state_invalid:'The connection attempt expired or did not start from this app. Please try again.',
  declined:'You declined the permissions, so Instagram data cannot be read.',
- no_page:'No Facebook Page was found. Instagram professional accounts must be linked to a Page you manage.',
+ no_page:'No Facebook Page was returned for the Facebook account you logged in with. Use the profile that manages the Page, and allow access to the business that owns it.',
  wrong_type:'None of your Pages has an Instagram professional (Business or Creator) account linked. Switch the account to professional in Instagram settings and link it to a Page.',
  missing_permissions:'Some permissions were not granted. Connect again and keep every box ticked.',
  token_error:'Instagram did not accept the login. Please try again.'};
@@ -33,14 +33,15 @@ export const IG_PERMISSIONS:{scope:string;why:string}[]=[
  {scope:'instagram_manage_insights',why:'Reach, views, saves, shares and follower numbers for your own account.'},
  {scope:'instagram_manage_comments',why:'Reserved for upcoming comment features. Comment text is not stored today.'},
  {scope:'pages_show_list',why:'To find the Facebook Page your Instagram account is linked to.'},
- {scope:'pages_read_engagement',why:'Needed by Facebook to read that link.'}];
+ {scope:'pages_read_engagement',why:'Needed by Facebook to read that link.'},
+ {scope:'business_management',why:'So Facebook will list a Page that belongs to a Meta business. Without it the Page list is empty.'}];
 
 // What to do about each failure. Same codes as CONNECT_ERRORS in src/igconnect.js. retry=false means pressing the button again cannot help.
 export const IG_FIX:Record<string,{fix:string;retry:boolean}>={
  not_configured:{fix:'This is a server setting. Ask whoever runs this app to set up the Instagram connection, or import a CSV for now.',retry:false},
  state_invalid:{fix:'Press Try again and finish the Facebook screens without leaving the page for long.',retry:true},
  declined:{fix:'Press Try again and allow every permission. We only read your own account and never post without you.',retry:true},
- no_page:{fix:'Link your Instagram account to a Facebook Page you manage, then press Try again.',retry:true},
+ no_page:{fix:'Link your Instagram account to a Facebook Page you manage, allow the business that owns the Page, then press Try again.',retry:true},
  wrong_type:{fix:'Switch the Instagram account to Business or Creator and link it to a Page, then press Try again.',retry:true},
  missing_permissions:{fix:'Press Try again and leave every permission box ticked.',retry:true},
  token_error:{fix:'Press Try again. If it keeps failing, wait a few minutes: Facebook may be slow.',retry:true}};

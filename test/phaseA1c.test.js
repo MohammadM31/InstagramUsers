@@ -198,7 +198,7 @@ test('A.1d privacy page is public, says what is stored, and shows a loud DRAFT b
 });
 test('A.1d connect callback stores the Facebook user id (best effort: a failing /me call does not fail the connect)', async () => {
   const mk = meOk => { const f = graphFor([[/oauth\/access_token.*fb_exchange/, () => ({ access_token: 'LONG', expires_in: 5184000 })], [/oauth\/access_token/, () => ({ access_token: 'SHORT' })], [/\/me\/accounts/, () => ({ data: [{ id: 'P1', instagram_business_account: { id: 'IG_1', username: 'u', followers_count: 10 } }] })],
-    [/\/me\/permissions/, () => ({ data: ['instagram_basic', 'instagram_manage_insights', 'instagram_manage_comments', 'pages_show_list', 'pages_read_engagement'].map(permission => ({ permission, status: 'granted' })) })], [/\/me\?fields=id/, () => (meOk ? { id: 'FB_42' } : new Error('x'))]]);
+    [/\/me\/permissions/, () => ({ data: ['instagram_basic', 'instagram_manage_insights', 'instagram_manage_comments', 'pages_show_list', 'pages_read_engagement', 'business_management'].map(permission => ({ permission, status: 'granted' })) })], [/\/me\?fields=id/, () => (meOk ? { id: 'FB_42' } : new Error('x'))]]);
     const q = recQ(), st = { take: async () => 'u1' }, kk = { set: async () => {} };
     return { q, run: async () => { let to; await makeIgConnect({ q, graph: makeGraph({ fetch: f }), state: st, keys: kk, env: { META_APP_ID: 'A', META_APP_SECRET: 'S', META_REDIRECT_URI: 'https://app.example/cb' }, now: () => NOW }).callback({ query: { code: 'c', state: 's' } }, { redirect: u => { to = u; } }); return to; } }; };
   const a = mk(true); assert.match(await a.run(), /ig=connected/); assert.equal(a.q.calls.find(c => /INSERT INTO ig_accounts/.test(c.sql)).p.at(-1), 'FB_42');
