@@ -31,10 +31,13 @@ export function getPageWork(): PageWork {
   return work;
 }
 
-// The picture itself is large. Send it only when the message is about acting on it.
+// The picture itself is large. Send it only when the message saves, schedules, or answers "create that album?".
 export function pagePayload(text: string): PageWork {
-  const act = /\b(save|schedule|album|folder|template|reel|post|this|these|current|generation|tags|hashtag|caption|image|photo)\b/i.test(text);
-  if (act) return { ...work };
+  const t = text.trim();
+  const withImage = /\b(save|schedule|album|folder|template|reel)\b/i.test(t)
+    || /^(yes|yeah|yep|sure|ok|okay|create it|create the folder|make it|do it|go ahead)\b/i.test(t)
+    || (/\b(create|make)\b/i.test(t) && /\bpost\b/i.test(t));
+  if (withImage) return { ...work };
   const { image, ...rest } = work;
   return rest;
 }

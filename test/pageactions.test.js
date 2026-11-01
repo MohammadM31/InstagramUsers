@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captionFromPage, localOpinion, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, affirmsCreate, categoryNamed } from '../src/pageactions.js';
+import { captionFromPage, localOpinion, ignoredWork, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, folderCreate, affirmsCreate, categoryNamed } from '../src/pageactions.js';
 
 const page = { name: 'Posts', prompt: 'iced coffee', ratio: '4:5', captions: [{ hook: 'Cold brew', body: 'Monday fuel', cta: 'Tag a friend' }], tags: { niche: ['coffee', '#cafe'] }, imageCount: 1 };
 
@@ -19,8 +19,17 @@ test('commands: schedule, template folder, reels album, and a yes after the ques
   assert.equal(wantsSchedule('take these generations create a post in the background with the tags and schedule it to 1pm today'), true);
   assert.equal(wantsSchedule('what should I post next'), false);
   assert.deepEqual(albumAsk('save the last image to the templates album'), { kind: 'folder', name: 'Templates' });
-  assert.deepEqual(albumAsk('save it to the reels album'), { kind: 'category', category: 'reel' });
+  assert.deepEqual(albumAsk('save the last image generated to the reels album'), { kind: 'category', category: 'reel' });
+  assert.deepEqual(albumAsk('save it to an album named template'), { kind: 'folder', name: 'template' });
   assert.equal(albumAsk('what do you think'), null);
+  assert.equal(ignoredWork('Instagram tool does not support creating albums.', page), true);
+  assert.equal(ignoredWork('The coffee caption is clear and the cafe tag fits the image.', page), false);
+  assert.equal(albumAsk('create an album named template in Albums tabs'), null);
+  assert.deepEqual(folderCreate('create an album named template in Albums tabs'), { name: 'template' });
+  assert.deepEqual(folderCreate('create a template folder'), { name: 'Templates' });
+  assert.deepEqual(folderCreate('make a folder called Brand shots'), { name: 'Brand shots' });
+  assert.equal(folderCreate('create a post'), null);
+  assert.equal(folderCreate('save it to the reels album'), null);
   assert.equal(affirmsCreate('yes, create it'), true);
   assert.equal(affirmsCreate('how am I doing'), false);
   assert.equal(categoryNamed('put it in reels'), 'reel');
@@ -30,4 +39,10 @@ test('1pm today is 13:00 on the same calendar day', () => {
   const d = new Date(iso);
   assert.equal(d.getHours(), 13);
   assert.equal(d.getDate(), 1);
+});
+test('a clock time that has already passed moves to tomorrow', () => {
+  const iso = clockFromText('schedule it for 1pm today', new Date('2026-11-01T15:00:00'));
+  const d = new Date(iso);
+  assert.equal(d.getHours(), 13);
+  assert.equal(d.getDate(), 2);
 });

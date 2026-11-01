@@ -6,7 +6,7 @@ import { llmConfig, llmChat } from './keys.js';
 import { hit } from './ratelimit.js';
 import { currentVoice, voiceInstruction } from './brandvoice.js'; // O.3: the saved brand voice shapes the wording of the reply
 import { makeAlbums, coverOf } from './albums.js';
-import { summarizePage, captionFromPage, hasWork, localOpinion, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, categoryNamed, affirmsCreate } from './pageactions.js';
+import { summarizePage, captionFromPage, flatTags, hasWork, localOpinion, ignoredWork, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, folderCreate, categoryNamed, affirmsCreate } from './pageactions.js';
 
 const ER = '(coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))';
 const L30 = "posted_at>now()-interval '30 days'";
@@ -58,9 +58,10 @@ async function route(text, m, tips, uid, pageSummary = '') {
     const voice = voiceInstruction(await currentVoice(q, uid).catch(() => null)); // '' when none
     const j = await llmChat(cfg, { response_format: { type: 'json_object' }, messages: [
         { role: 'system', content: `You are the assistant inside an Instagram growth tool. You know this page's live state:\n${JSON.stringify({ metrics: m, health: health(m), priorities: tips.slice(0, 4).map(t => t.text) })}\n` +
-          (pageSummary ? `What the user currently has on screen:\n${pageSummary}\nWhen they say "this", "current", or "these", talk about that work.\n` : '') +
+          (pageSummary ? `What the user currently has open:\n${pageSummary}\nWhen they refer to this, current, these, the generation, the tags, or the image, talk about that work and no other.\n` : '') +
           `Pick ONE action for the user's request. Return JSON {"intent":"image|analytics|finance|tip|info","text":"","imagePrompt":"","capital":0}. ` +
           `"text" is at most 20 words, plain and brief, no greeting. Use intent "image" only if they want a picture made (put the visual in imagePrompt). "analytics" for performance/progress/page info, "finance" for budget or capital (put the amount in capital), "tip" for what to do next. ` +
+          `Albums, saving a draft, and scheduling are actions this app performs. Never say this tool cannot create an album or that the user must use the Instagram app to do it. ` +
           `When advising, prefer collaborations, mentions, reshares, giveaways and community over hashtags or posting more. Never invent numbers not in the state.` +
           (voice ? `\nBrand voice for the wording of "text" (the limits above still apply): ${voice}` : '') },
         { role: 'user', content: text }] }, 20000);
@@ -81,6 +82,10 @@ const draftFrom = page => ({
   cover: coverOf(page?.image) || coverOf(page?.imageUrl),
 });
 
+const pictureNote = draft => draft.cover
+  ? ' The generated image is included.'
+  : ' No image was on Posts, so this has the caption and tags only.';
+
 // Commands that change the app: schedule the current Posts work, or save it into an album.
 // Returns a response body, or null to let the normal reply run.
 async function pageCommand(req, text, page) {
@@ -89,13 +94,23 @@ async function pageCommand(req, text, page) {
   const pending = last?.data?.pendingFolder;
   if (pending && affirmsCreate(text)) {
     const folder = await albums.createFolder(req.uid, pending).catch(async e => e.status === 409 ? albums.findFolder(req.uid, pending) : Promise.reject(e));
-    const row = await albums.saveDraft(req.uid, { ...draftFrom(page), category: page?.ratio === '9:16' ? 'reel' : 'photo', folderId: folder.id });
-    return { type: 'info', text: `Created “${folder.name}” and saved the current work there.`, data: { folderId: folder.id, itemId: row.id } };
+    const draft = draftFrom(page);
+    const row = await albums.saveDraft(req.uid, { ...draft, category: page?.ratio === '9:16' ? 'reel' : 'photo', folderId: folder.id });
+    return { type: 'info', text: `Created “${folder.name}” and saved the current work there.${pictureNote(draft)}`, data: { folderId: folder.id, itemId: row.id } };
   }
   if (pending && categoryNamed(text)) {
     const category = categoryNamed(text);
-    const row = await albums.saveDraft(req.uid, { ...draftFrom(page), category, folderId: null });
-    return { type: 'info', text: `Saved the current work into the ${category === 'reel' ? 'Reels' : category} album.`, data: { itemId: row.id } };
+    const draft = draftFrom(page);
+    const row = await albums.saveDraft(req.uid, { ...draft, category, folderId: null });
+    const label = category === 'reel' ? 'Reels' : category;
+    return { type: 'info', text: `Saved the current work into the ${label} album.${pictureNote(draft)}`, data: { itemId: row.id } };
+  }
+  const made = folderCreate(text);
+  if (made && !albumAsk(text)) {
+    const existing = await albums.findFolder(req.uid, made.name);
+    if (existing) return { type: 'info', text: `You already have an album named “${existing.name}”. Open Albums to see it.`, data: { folderId: existing.id } };
+    const folder = await albums.createFolder(req.uid, made.name);
+    return { type: 'info', text: `Created the album “${folder.name}”. Open Albums to see it.`, data: { folderId: folder.id } };
   }
   const ask = albumAsk(text);
   if (ask) {
@@ -105,25 +120,33 @@ async function pageCommand(req, text, page) {
       if (!existing) {
         const names = (await albums.listFolders(req.uid)).map(f => f.name);
         const have = names.length ? ` You already have: ${names.join(', ')}.` : '';
-        return { type: 'info', text: `There is no folder named ${ask.name}. Should I create it, or save this into another album (Reels, Photos, Carousels, Stories)?${have}`, data: { pendingFolder: ask.name } };
+        return { type: 'info', text: `There is no album named ${ask.name}. Should I create it, or save this into another album (Reels, Photos, Carousels, Stories)?${have}`, data: { pendingFolder: ask.name } };
       }
-      const row = await albums.saveDraft(req.uid, { ...draftFrom(page), category: page?.ratio === '9:16' ? 'reel' : 'photo', folderId: existing.id });
-      return { type: 'info', text: `Saved the current work into ${existing.name}.`, data: { folderId: existing.id, itemId: row.id } };
+      const draft = draftFrom(page);
+      const row = await albums.saveDraft(req.uid, { ...draft, category: page?.ratio === '9:16' ? 'reel' : 'photo', folderId: existing.id });
+      return { type: 'info', text: `Saved the current work into ${existing.name}.${pictureNote(draft)}`, data: { folderId: existing.id, itemId: row.id } };
     }
-    const row = await albums.saveDraft(req.uid, { ...draftFrom(page), category: ask.category, folderId: null });
+    const draft = draftFrom(page);
+    const row = await albums.saveDraft(req.uid, { ...draft, category: ask.category, folderId: null });
     const label = ask.category === 'reel' ? 'Reels' : ask.category;
-    return { type: 'info', text: `Saved the current work into the ${label} album.`, data: { itemId: row.id } };
+    return { type: 'info', text: `Saved the current work into the ${label} album.${pictureNote(draft)}`, data: { itemId: row.id } };
   }
   if (wantsSchedule(text)) {
-    const when = clockFromText(text);
+    const now = new Date();
+    const when = clockFromText(text, now);
     if (!when) return { type: 'info', text: 'Tell me a time, for example “schedule it for 1pm today”.', data: {} };
     const caption = captionFromPage(page);
     if (!caption) return { type: 'info', text: 'Generate a caption, tags or an image on Posts first, then ask me to schedule it.', data: {} };
     const image = typeof page?.imageUrl === 'string' && /^https?:\/\//.test(page.imageUrl) ? page.imageUrl : null;
     const [row] = await q('INSERT INTO scheduled_posts(user_id,caption,image,platforms,scheduled_at) VALUES($1,$2,$3,$4,$5) RETURNING id', [req.uid, caption, image, ['instagram'], when]);
-    const whenLabel = new Date(when).toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric' });
-    const note = image ? '' : ' The picture is not a public link yet, so Instagram cannot publish it until storage is set up. The caption and tags are on the schedule.';
-    return { type: 'info', text: `Scheduled that post for ${whenLabel}. It is in Scheduling.${note}`, data: { scheduledId: row.id, scheduledAt: when } };
+    const at = new Date(when);
+    const whenLabel = at.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric' });
+    const rolled = /\btoday\b/i.test(text) && at.getDate() !== now.getDate();
+    const tags = flatTags(page).slice(0, 8);
+    const tagNote = tags.length ? ` Tags included: ${tags.join(' ')}.` : '';
+    const lead = rolled ? `That time today has already passed, so I scheduled it for ${whenLabel}.` : `Scheduled that post for ${whenLabel}.`;
+    const note = image ? ' The generated image is attached.' : (page?.image ? ' The picture is not a public link yet, so Instagram cannot publish it until storage is set up. The caption and tags are on the schedule.' : '');
+    return { type: 'info', text: `${lead} It is in Scheduling.${tagNote}${note}`, data: { scheduledId: row.id, scheduledAt: when } };
   }
   return null;
 }
@@ -132,7 +155,7 @@ export async function assistant(req, res) {
   const text = String(req.body?.message || '').slice(0, 500);
   if (!text.trim()) return res.status(400).json({ error: 'message required' });
   const page = req.body?.page && typeof req.body.page === 'object' ? req.body.page : null;
-  if (page || aboutCurrentWork(text) || wantsSchedule(text) || albumAsk(text)) {
+  if (page || aboutCurrentWork(text) || wantsSchedule(text) || albumAsk(text) || folderCreate(text)) {
     try {
       const done = await pageCommand(req, text, page);
       if (done) return res.json(done);
@@ -150,7 +173,7 @@ export async function assistant(req, res) {
         { role: 'system', content: 'Comment on the user\'s current Instagram draft in at most 40 words. Use only the work described. Do not invent numbers.\n' + (summarizePage(page) || 'Nothing is on the page.') },
         { role: 'user', content: text }] }, 20000);
       const said = String(j.choices?.[0]?.message?.content || '').replace(/^["']|["']$/g, '').slice(0, 400);
-      if (said) return res.json({ type: 'info', text: said, data: {} });
+      if (said && !ignoredWork(said, page)) return res.json({ type: 'info', text: said, data: {} });
     } catch { /* the local comment still answers */ }
     return res.json({ type: 'info', text: local, data: {} });
   }

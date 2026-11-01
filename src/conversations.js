@@ -42,7 +42,7 @@ export function cleanTitle(v) {
 // MAX_DATA after that is reduced to the small whitelisted keys. This protects the table even if another stream leaks a dataUrl into a response.
 const MAX_STR = 4000, MAX_DATA = 32768;
 const B64 = /data:[\w.+\/-]*;base64,/i;
-const KEEP = ['imageIds', 'ratio', 'kind', 'jobId', 'parentImageId', 'instruction', 'summary', 'status', 'error'];
+const KEEP = ['imageIds', 'ratio', 'kind', 'jobId', 'parentImageId', 'instruction', 'summary', 'status', 'error', 'pendingFolder', 'folderId', 'itemId', 'scheduledId'];
 function scrub(v, depth) {
   if (v === null || typeof v === 'boolean') return v;
   if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;

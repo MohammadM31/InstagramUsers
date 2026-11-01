@@ -34,21 +34,38 @@ export function hasWork(page) {
 
 // A comment on the work that is actually on the page, used when no model is available.
 export function localOpinion(page) {
-  if (!hasWork(page)) return 'Nothing has been generated on this page yet. Make a caption, hashtags or an image, then ask again.';
+  const where = page?.name ? `You are on ${page.name}. ` : '';
+  if (!hasWork(page)) return where + 'Nothing has been generated on Posts yet. Make a caption, hashtags or an image, then ask again.';
   const bits = [];
   if (page.imageCount) bits.push(`You have ${page.imageCount} image${page.imageCount > 1 ? 's' : ''} from “${String(page.prompt || 'the prompt').slice(0, 140)}”${page.ratio ? ` at ${page.ratio}` : ''}.`);
-  else bits.push('No image has been generated on this page yet.');
+  else bits.push('No image has been generated on Posts yet.');
   const c = page.captions?.[0];
   if (c?.hook || c?.body) bits.push(`The latest caption starts “${String(c.hook || c.body).slice(0, 140)}”.`);
   else bits.push('No caption has been generated yet.');
   const tags = flatTags(page);
   if (tags.length) bits.push(`The tags are ${tags.slice(0, 12).join(' ')}.`);
   else bits.push('No hashtags have been generated yet.');
-  return bits.join(' ');
+  return where + bits.join(' ');
+}
+
+// The model sometimes answers with a generic tip and never mentions the draft. That is not a comment on the work.
+export function ignoredWork(said, page) {
+  const s = String(said || '');
+  if (/does not support|instagram app/i.test(s)) return true;
+  if (!hasWork(page)) return false;
+  const words = [];
+  if (page.prompt) words.push(...String(page.prompt).toLowerCase().split(/\W+/));
+  const c = page.captions?.[0];
+  if (c?.hook) words.push(...String(c.hook).toLowerCase().split(/\W+/));
+  for (const t of flatTags(page).slice(0, 12)) words.push(...String(t).replace(/^#+/, '').toLowerCase().split(/\W+/));
+  const useful = [...new Set(words.filter(w => w.length > 3))];
+  if (!useful.length) return !/\b(caption|tag|hashtag|image|photo|picture|generation)\b/i.test(s);
+  const hay = s.toLowerCase();
+  return !useful.some(w => hay.includes(w));
 }
 
 export function aboutCurrentWork(text) {
-  return /\b(what do you think|current|these|this generation|the tags|the hashtags|the caption|the image|this image)\b/i.test(String(text || ''));
+  return /\b(what do you think|current|these|this generation|these generations|the tags|the hashtags|my tags|my hashtags|the caption|my caption|the image|this image|my image|my generation)\b/i.test(String(text || ''));
 }
 
 export function wantsSchedule(text) {
@@ -70,6 +87,7 @@ export function clockFromText(text, now = new Date()) {
   const d = new Date(now.getTime());
   if (/\btomorrow\b/i.test(text)) d.setDate(d.getDate() + 1);
   d.setHours(h, min, 0, 0);
+  if (d.getTime() <= now.getTime()) d.setDate(d.getDate() + 1);
   return d.toISOString();
 }
 
@@ -82,11 +100,39 @@ export function categoryNamed(text) {
   return null;
 }
 
+function cleanFolderName(s) {
+  return String(s || '').replace(/^["'“]+|["'”.,!]+$/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+}
+
+// "create an album named template" / "make a template folder". Null when this is not a new-folder command.
+// A save ("save it to the reels album") is albumAsk, not this.
+export function folderCreate(text) {
+  const raw = String(text || '').trim();
+  if (!/\b(create|make|new)\b/i.test(raw) || !/\b(albums?|folders?)\b/i.test(raw)) return null;
+  const named = raw.match(/\b(?:named|called|titled)\s+["'“]?(.+?)["'”]?(?=\s+(?:in|on|under|inside|for|to|and)\b|[.?!,]|$)/i);
+  if (named) {
+    const name = cleanFolderName(named[1]);
+    if (name) return { name };
+  }
+  if (/\btemplates?\s+(?:album|folder)s?\b/i.test(raw)) return { name: 'Templates' };
+  const trailing = raw.match(/\b(?:album|folder)s?\s+["'“]?([A-Za-z0-9][\w .'-]{0,40})/i);
+  if (trailing && !/^(named|called|titled|in|on|for|the|a|an|tab|tabs)$/i.test(trailing[1])) {
+    const name = cleanFolderName(trailing[1].replace(/\s+\b(?:in|on|under|inside|for|to|and)\b[\s\S]*$/i, ''));
+    if (name && !/^(tab|tabs|page|pages)$/i.test(name)) return { name };
+  }
+  return null;
+}
+
 // Save into a named folder (Templates) or a built-in album category (Reels). Null when this is not a save command.
 export function albumAsk(text) {
   const t = String(text || '').toLowerCase();
   if (!/\b(save|put|add|store)\b/.test(t)) return null;
   if (!/\b(album|folder|template|reel|photo|carousel|story|stories)\b/.test(t)) return null;
+  const named = String(text || '').match(/\b(?:named|called|titled)\s+["'“]?(.+?)["'”]?(?=\s+(?:in|on|under|inside|or|for|to|and)\b|[.?!,]|$)/i);
+  if (named) {
+    const name = cleanFolderName(named[1]);
+    if (name) return { kind: 'folder', name };
+  }
   if (/\btemplates?\b/.test(t)) return { kind: 'folder', name: 'Templates' };
   const category = categoryNamed(t);
   if (category) return { kind: 'category', category };

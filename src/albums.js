@@ -2,7 +2,7 @@
 // `q` is injected. Cover is a data URL or http URL; image library ids stay in image_ids when they exist.
 
 const CATS = ['reel', 'photo', 'carousel', 'story', 'other'];
-const COVER_MAX = 1_500_000;
+const COVER_MAX = 4_000_000;
 
 const item = r => ({
   id: r.id, title: r.title, category: r.category, categorySource: r.category_source, status: r.status,
