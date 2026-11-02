@@ -85,7 +85,7 @@ export function buildAssistantBody(o: SendOpts): Record<string, any> {
 }
 
 // What a retry of a failed image message re-sends: the user line before it, plus the ratio and reference it used.
-export function retryParams(list: Msg[], id: string): { text: string; ratio?: string; referenceImageId?: string; overlayText?: string } | null {
+export function retryParams(list: Msg[], id: string): { text: string; ratio?: string; referenceImageId?: string; referenceImage?: string; overlayText?: string } | null {
   const i = list.findIndex(m => m.id === id);
   if (i < 0) return null;
   const d = list[i].data || {};
@@ -93,7 +93,9 @@ export function retryParams(list: Msg[], id: string): { text: string; ratio?: st
   for (let k = i - 1; k >= 0; k--) if (list[k].role === 'user') { text = list[k].text; break; }
   if (!text.trim()) text = String(d.instruction || '');
   if (!text.trim()) return null;
-  return { text, ratio: d.ratio, referenceImageId: d.referenceImageId || d.parentImageId, overlayText: d.overlayText };
+  const out: { text: string; ratio?: string; referenceImageId?: string; referenceImage?: string; overlayText?: string } = { text, ratio: d.ratio, referenceImageId: d.referenceImageId || d.parentImageId, overlayText: d.overlayText };
+  if (typeof d.referenceImage === 'string' && d.referenceImage.startsWith('data:image/')) out.referenceImage = d.referenceImage;
+  return out;
 }
 
 export const imageIdsOf = (m: Msg | null | undefined): string[] => (Array.isArray(m?.data?.imageIds) ? m!.data.imageIds.filter((x: unknown) => typeof x === 'string' && x) : []);

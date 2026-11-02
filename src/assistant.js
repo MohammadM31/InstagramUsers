@@ -6,7 +6,7 @@ import { llmConfig, llmChat } from './keys.js';
 import { hit } from './ratelimit.js';
 import { currentVoice, voiceInstruction } from './brandvoice.js'; // O.3: the saved brand voice shapes the wording of the reply
 import { makeAlbums, coverOf } from './albums.js';
-import { summarizePage, captionFromPage, flatTags, hasWork, localOpinion, ignoredWork, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, folderCreate, categoryNamed, affirmsCreate } from './pageactions.js';
+import { summarizePage, captionFromPage, flatTags, hasWork, localOpinion, ignoredWork, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, folderCreate, categoryNamed, affirmsCreate, wantsGeneratedImage, imageRequestPrompt } from './pageactions.js';
 
 const ER = '(coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))';
 const L30 = "posted_at>now()-interval '30 days'";
@@ -151,10 +151,26 @@ async function pageCommand(req, text, page) {
   return null;
 }
 
+async function startImage(req, res, prompt, referenceImage) {
+  try {
+    if (!await hasReplicateKey(req.uid)) return res.json({ type: 'info', text: 'Image generation needs a Replicate key: add one in Settings or set REPLICATE_API_TOKEN.', data: {} });
+    const rl = await hit('image', req.uid, 20, 3600);
+    if (!rl.ok) return res.status(429).json({ error: rl.msg });
+    const b = req.body || {};
+    const jobId = await enqueueImage(req.uid, { prompt: String(prompt || '').slice(0, 1000), ratio: b.ratio || '4:5', overlayText: b.overlayText ? String(b.overlayText).slice(0, 120) : undefined, referenceImage: referenceImage || undefined, n: 1 });
+    return res.json({ type: 'image', text: 'Generating your image…', data: { jobId } });
+  } catch (e) {
+    const missing = e.status === 503;
+    return res.json({ type: 'info', text: missing ? 'Image generation needs a Replicate key: add one in Settings or set REPLICATE_API_TOKEN.' : (e.expose ? e.message : 'Image generation failed. Try again.'), data: {} });
+  }
+}
+
 export async function assistant(req, res) {
   const text = String(req.body?.message || '').slice(0, 500);
   if (!text.trim()) return res.status(400).json({ error: 'message required' });
   const page = req.body?.page && typeof req.body.page === 'object' ? req.body.page : null;
+  const rawRef = typeof req.body?.referenceImage === 'string' ? req.body.referenceImage : '';
+  const ref = /^(data:image\/|https?:\/\/)/.test(rawRef) ? rawRef : '';
   if (page || aboutCurrentWork(text) || wantsSchedule(text) || albumAsk(text) || folderCreate(text)) {
     try {
       const done = await pageCommand(req, text, page);
@@ -164,6 +180,11 @@ export async function assistant(req, res) {
       console.error('page command', e.message);
       return res.json({ type: 'info', text: 'I could not do that just now. ' + (e.message || 'Try again.'), data: {} });
     }
+  }
+  if (wantsGeneratedImage(text, req.body?.mode)) {
+    if (/\b(attached|reference|this image)\b/i.test(text) && !ref)
+      return res.json({ type: 'info', text: 'Attach the image first, then ask me to generate from it.', data: {} });
+    return startImage(req, res, imageRequestPrompt(text, !!ref), ref);
   }
   if (aboutCurrentWork(text)) {
     const local = localOpinion(page);
@@ -182,19 +203,7 @@ export async function assistant(req, res) {
   const o = await route(text, m, tips, req.uid, summarizePage(page));
   const say = (fallback) => (o.text && String(o.text).slice(0, 200)) || fallback;
 
-  if (o.intent === 'image') {
-    // 0.8: queue the job and return its id. The card polls GET /api/content/image/:jobId (same endpoint as Content AI).
-    try {
-      if (!await hasReplicateKey(req.uid)) return res.json({ type: 'info', text: 'Image generation needs a Replicate key: add one in Settings or set REPLICATE_API_TOKEN.', data: {} });
-      const rl = await hit('image', req.uid, 20, 3600); // assistant images spend from the same budget as Content AI
-      if (!rl.ok) return res.status(429).json({ error: rl.msg });
-      const b = req.body || {};
-      const jobId = await enqueueImage(req.uid, { prompt: String(o.imagePrompt || imagePrompt(text)).slice(0, 1000), ratio: b.ratio || '4:5', overlayText: b.overlayText ? String(b.overlayText).slice(0, 120) : undefined, referenceImage: b.referenceImage, n: 1 });
-      return res.json({ type: 'image', text: 'Generating your image…', data: { jobId } });
-    } catch (e) {
-      return res.json({ type: 'info', text: e.status === 503 ? 'Image generation needs a Replicate key: add one in Settings or set REPLICATE_API_TOKEN.' : 'Image generation failed. Try again.', data: {} });
-    }
-  }
+  if (o.intent === 'image') return startImage(req, res, String(o.imagePrompt || imagePrompt(text)), ref);
   if (o.intent === 'finance') {
     const cap = Math.max(0, Number(o.capital) || amount(text));
     return res.json({ type: 'finance', text: say('Suggested split.'), data: financePlan(m, cap) });

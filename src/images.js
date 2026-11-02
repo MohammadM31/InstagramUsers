@@ -37,14 +37,47 @@ export async function refinePrompt(prompt, hasRef, uid) {
   } catch { return prompt; }
 }
 
+// A phone photo as a data URL is too large for the queue and for Replicate's JSON body. Shrink it first.
+export async function shrinkReference(referenceImage) {
+  if (typeof referenceImage !== 'string' || !referenceImage.startsWith('data:image/')) return referenceImage || null;
+  const m = /^data:image\/[a-z0-9.+-]+;base64,([a-z0-9+/=\s]+)$/i.exec(referenceImage);
+  if (!m) { const e = new Error('The attached image could not be read. Use a PNG, JPEG or WebP.'); e.expose = true; e.status = 400; throw e; }
+  let buf;
+  try { buf = Buffer.from(m[1].replace(/\s/g, ''), 'base64'); } catch { buf = Buffer.alloc(0); }
+  if (buf.length < 32) { const e = new Error('The attached image could not be read. Use a PNG, JPEG or WebP.'); e.expose = true; e.status = 400; throw e; }
+  try {
+    const out = await sharp(buf).rotate().resize(1024, 1024, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+    return 'data:image/jpeg;base64,' + out.toString('base64');
+  } catch {
+    const e = new Error('The attached image could not be read. Use a PNG, JPEG or WebP.'); e.expose = true; e.status = 400; throw e;
+  }
+}
+
+// Replicate accepts a URL more reliably than a data URL. Fall back to the small data URL if the upload is refused.
+async function asRemoteRef(ref, token) {
+  if (!ref) return null;
+  if (/^https?:\/\//.test(ref)) return ref;
+  const shrunk = await shrinkReference(ref);
+  const m = /^data:image\/jpeg;base64,(.+)$/i.exec(shrunk || '');
+  if (!m) return shrunk;
+  try {
+    const fd = new FormData();
+    fd.append('content', new Blob([new Uint8Array(Buffer.from(m[1], 'base64'))], { type: 'image/jpeg' }), 'reference.jpg');
+    const r = await fetch(`${RBASE}/files`, { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: fd, signal: AbortSignal.timeout(45000) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j?.urls?.get) return j.urls.get;
+  } catch (e) { console.warn('[image] reference upload failed, sending the image inline:', e.message); }
+  return shrunk;
+}
+
 async function predict(name, prompt, ratio, ref, token) {
   const m = MODELS[name], input = { prompt, output_format: 'png' };
   if (ref && m.ref) { input[m.ref] = m.ref === 'image_input' ? [ref] : ref; if (m.ref === 'input_image') input.aspect_ratio = 'match_input_image'; else if (m.ref === 'image') input.prompt_strength = 0.4; }
   else input.aspect_ratio = ratio;
   let p = await (await fetch(`${RBASE}/models/${m.id}/predictions`, { method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Prefer: 'wait' }, body: JSON.stringify({ input }) })).json();
-  for (let i = 0; i < 60 && p.status && !['succeeded', 'failed', 'canceled'].includes(p.status); i++) { // poll like ProductAI
-    await sleep(2000); p = await (await fetch(p.urls.get, { headers: { Authorization: `Bearer ${token}` } })).json();
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Prefer: 'wait' }, body: JSON.stringify({ input }), signal: AbortSignal.timeout(90000) })).json();
+  for (let i = 0; i < 45 && p.status && !['succeeded', 'failed', 'canceled'].includes(p.status); i++) { // poll like ProductAI
+    await sleep(2000); p = await (await fetch(p.urls.get, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20000) })).json();
   }
   if (p.status === 'failed' || p.error || p.detail) throw new Error(p.error || p.detail || 'replicate error');
   const url = Array.isArray(p.output) ? p.output[0] : (typeof p.output === 'string' ? p.output : p.output?.url);
@@ -57,7 +90,7 @@ export async function generateImage({ prompt, ratio = '1:1', model, overlayText,
   if (!token) throw Object.assign(new Error('REPLICATE_API_TOKEN not set'), { status: 503 });
   const [W, H] = RATIOS[ratio] || RATIOS['1:1'];
   const hasRef = !!referenceImage && /^(https?:|data:image)/.test(referenceImage);
-  const ref = hasRef ? referenceImage : null;
+  const ref = hasRef ? await asRemoteRef(referenceImage, token) : null;
   let want = model || process.env.IMAGE_MODEL || 'flux-1.1-pro';
   if (!MODELS[want]) want = Object.keys(MODELS).find(k => MODELS[k].id === want) || 'flux-1.1-pro';
   if (ref && !MODELS[want].ref) want = 'flux-kontext-pro'; // ProductAI rule: never silently drop a reference image

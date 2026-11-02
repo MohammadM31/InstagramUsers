@@ -218,18 +218,20 @@ export default function Assistant({
   };
 
   // ---- sending ----
-  type Req={text:string;image:boolean;ratio:string;referenceImageId?:string;overlayText?:string;showUser:boolean};
+  type Req={text:string;image:boolean;ratio:string;referenceImageId?:string;referenceImage?:string;overlayText?:string;showUser:boolean};
   const submit=async(o:Req)=>{
     onInteract?.();setNotice('');setB(true);stick.current=true;
     const ep=epoch.current;
     const phId=newClientId();
+    const attached=o.referenceImage||refImg?.dataUrl;
+    const useFile=!!attached&&(o.image||!!o.referenceImage||/\b(this|these|image|photo|picture|file|attach|reference|save|schedule|album)\b/i.test(o.text));
+    const file=useFile?attached:undefined;
     if(o.showUser)setMsgs(l=>appendMessage(l,{id:newClientId(),role:'user',type:'info',text:o.text}));
     // An image request appends its OWN placeholder; nothing already in the thread is touched.
-    if(o.image)setMsgs(l=>appendMessage(l,{id:phId,role:'assistant',type:'image',text:'',data:{status:'pending',imageIds:[],ratio:o.ratio,referenceImageId:o.referenceImageId,overlayText:o.overlayText,summary:'Sending your request…'}}));
+    if(o.image)setMsgs(l=>appendMessage(l,{id:phId,role:'assistant',type:'image',text:'',data:{status:'pending',imageIds:[],ratio:o.ratio,referenceImageId:o.referenceImageId,referenceImage:file,overlayText:o.overlayText,summary:'Sending your request…'}}));
     else setTyping(true);
     try{
-      const useFile=!!refImg?.dataUrl&&(o.image||/\b(this|these|image|photo|picture|file|attach|reference|save|schedule|album)\b/i.test(o.text));
-      const x=await api<any>('/assistant',{method:'POST',body:buildAssistantBody({text:o.text,conversationId:convoRef.current,image:o.image,ratio:o.ratio,referenceImageId:o.referenceImageId,referenceImage:useFile?refImg?.dataUrl:undefined,overlayText:o.overlayText,page:{...pagePayload(o.text),attached:!!refImg?.dataUrl}})});
+      const x=await api<any>('/assistant',{method:'POST',body:buildAssistantBody({text:o.text,conversationId:convoRef.current,image:o.image,ratio:o.ratio,referenceImageId:o.referenceImageId,referenceImage:file,overlayText:o.overlayText,page:{...pagePayload(o.text),attached:!!attached}})});
       if(ep!==epoch.current||!alive.current)return; // the person moved to another chat meanwhile
       if(x.conversationId)setConvo(String(x.conversationId));
       const d=x.data&&typeof x.data==='object'?x.data:{};
@@ -251,7 +253,8 @@ export default function Assistant({
   const send=(e:FormEvent)=>{
     e.preventDefault();
     if(!m.trim()||b||up)return;
-    const image=mode==='image';
+    const asksImage=/\b(generate|draw|design)\b/i.test(m)&&/\b(image|picture|photo|visual)\b/i.test(m)||(/\b(make|create)\b/i.test(m)&&/\b(image|picture|photo|visual)\b/i.test(m)&&!/\b(post|album|folder)\b/i.test(m));
+    const image=mode==='image'||asksImage;
     const o:Req={text:m.trim(),image,ratio:imgRatio,referenceImageId:refImg?.id,overlayText:image?overlay.trim():'',showUser:true};
     setM('');setRefImg(null);setOverlay('');
     submit(o);
@@ -260,7 +263,7 @@ export default function Assistant({
     if(b)return;
     const p=retryParams(msgsRef.current,id);
     if(!p)return;
-    submit({text:p.text,image:true,ratio:p.ratio||imgRatio,referenceImageId:p.referenceImageId,overlayText:p.overlayText,showUser:false}); // a NEW placeholder; the failed one stays as it was
+    submit({text:p.text,image:true,ratio:p.ratio||imgRatio,referenceImageId:p.referenceImageId,referenceImage:p.referenceImage,overlayText:p.overlayText,showUser:false}); // a NEW placeholder; the failed one stays as it was
   };
 
   // ---- save to album: POST /api/albums/items. 201 (created) and 200 existing:true both mean it is saved. ----

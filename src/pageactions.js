@@ -142,3 +142,22 @@ export function albumAsk(text) {
 export function affirmsCreate(text) {
   return /^(yes|yeah|yep|sure|ok|okay|create it|create the folder|make it|do it|go ahead)\b/i.test(String(text || '').trim());
 }
+
+// A picture request. Image mode is an explicit one. "create a post" and "create an album" are not.
+export function wantsGeneratedImage(text, mode) {
+  if (mode === 'image') return true;
+  const t = String(text || '');
+  if (/\b(album|folder)\b/i.test(t)) return false;
+  if (/\b(generate|draw|design)\b/i.test(t) && /\b(image|picture|photo|visual)\b/i.test(t)) return true;
+  if (/\b(make|create)\b/i.test(t) && /\b(image|picture|photo|visual)\b/i.test(t) && !/\bpost\b/i.test(t)) return true;
+  return false;
+}
+
+// Prompt sent to the image model. A vague "from this attached image" becomes an edit of that photo.
+export function imageRequestPrompt(text, hasRef) {
+  const raw = String(text || '').trim();
+  const stripped = raw.replace(/^(please\s+)?(generate|make|create|draw|design)\s+(me\s+)?(an?\s+)?(image|picture|photo|post|visual)?\s*(of|for|with)?\s*/i, '').trim();
+  if (hasRef && (!stripped || /^(referenced|based|from|using|with|this|the|attached|image|photo)\b/i.test(stripped)))
+    return 'Create a polished Instagram post from the attached photo. Keep the subject recognizable.';
+  return (stripped || raw).slice(0, 1000);
+}

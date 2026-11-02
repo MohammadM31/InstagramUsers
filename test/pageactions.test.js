@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captionFromPage, localOpinion, ignoredWork, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, folderCreate, affirmsCreate, categoryNamed } from '../src/pageactions.js';
+import { captionFromPage, localOpinion, ignoredWork, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, folderCreate, affirmsCreate, categoryNamed, wantsGeneratedImage, imageRequestPrompt } from '../src/pageactions.js';
 
 const page = { name: 'Posts', prompt: 'iced coffee', ratio: '4:5', captions: [{ hook: 'Cold brew', body: 'Monday fuel', cta: 'Tag a friend' }], tags: { niche: ['coffee', '#cafe'] }, imageCount: 1 };
 
@@ -39,6 +39,14 @@ test('1pm today is 13:00 on the same calendar day', () => {
   const d = new Date(iso);
   assert.equal(d.getHours(), 13);
   assert.equal(d.getDate(), 1);
+});
+test('an attached photo is a generation, not a tip about having no posts', () => {
+  const said = 'generate an image referenced from this attached image';
+  assert.equal(wantsGeneratedImage(said), true);
+  assert.equal(wantsGeneratedImage('what do you think of the current generation and tags'), false);
+  assert.equal(wantsGeneratedImage('create an album named template'), false);
+  assert.equal(imageRequestPrompt(said, true), 'Create a polished Instagram post from the attached photo. Keep the subject recognizable.');
+  assert.equal(imageRequestPrompt('generate an image of a red cup', false), 'a red cup');
 });
 test('a clock time that has already passed moves to tomorrow', () => {
   const iso = clockFromText('schedule it for 1pm today', new Date('2026-11-01T15:00:00'));
