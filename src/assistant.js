@@ -6,7 +6,8 @@ import { llmConfig, llmChat } from './keys.js';
 import { hit } from './ratelimit.js';
 import { currentVoice, voiceInstruction } from './brandvoice.js'; // O.3: the saved brand voice shapes the wording of the reply
 import { makeAlbums, coverOf } from './albums.js';
-import { summarizePage, captionFromPage, flatTags, hasWork, localOpinion, ignoredWork, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, folderCreate, categoryNamed, affirmsCreate, wantsGeneratedImage, imageRequestPrompt } from './pageactions.js';
+import { shrinkReference, adjustImage } from './images.js';
+import { summarizePage, captionFromPage, flatTags, hasWork, localOpinion, ignoredWork, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, folderCreate, categoryNamed, affirmsCreate, wantsGeneratedImage, imageRequestPrompt, imageAdjust } from './pageactions.js';
 
 const ER = '(coalesce(likes,0)+coalesce(comments,0)+coalesce(saves,0)+coalesce(shares,0))';
 const L30 = "posted_at>now()-interval '30 days'";
@@ -75,16 +76,28 @@ async function route(text, m, tips, uid, pageSummary = '') {
   return { intent: 'info' };
 }
 
-const draftFrom = page => ({
-  title: String(page?.prompt || page?.captions?.[0]?.hook || 'Saved from the assistant').slice(0, 140),
+async function coverFor(req, page) {
+  const raw = req.body?.referenceImage;
+  if (typeof raw === 'string' && raw.startsWith('data:image/')) {
+    try { const small = coverOf(await shrinkReference(raw)); if (small) return small; } catch { /* the page image can still be used */ }
+  } else {
+    const linked = coverOf(raw);
+    if (linked) return linked;
+  }
+  return coverOf(page?.image) || coverOf(page?.imageUrl);
+}
+
+const draftFrom = (page, cover) => ({
+  title: String(page?.prompt || page?.captions?.[0]?.hook || (cover ? 'Attached photo' : 'Saved from the assistant')).slice(0, 140),
   caption: captionFromPage(page),
   ratio: page?.ratio || null,
-  cover: coverOf(page?.image) || coverOf(page?.imageUrl),
+  cover: cover || null,
 });
 
-const pictureNote = draft => draft.cover
-  ? ' The generated image is included.'
-  : ' No image was on Posts, so this has the caption and tags only.';
+const savedLine = (where, draft, created) => {
+  const lead = created ? `Created “${where}” and saved this there.` : `Saved this into ${where}.`;
+  return lead + (draft.cover ? ' The photo is in it.' : ' No image was attached, so this has the caption and tags only.');
+};
 
 // Commands that change the app: schedule the current Posts work, or save it into an album.
 // Returns a response body, or null to let the normal reply run.
@@ -94,16 +107,16 @@ async function pageCommand(req, text, page) {
   const pending = last?.data?.pendingFolder;
   if (pending && affirmsCreate(text)) {
     const folder = await albums.createFolder(req.uid, pending).catch(async e => e.status === 409 ? albums.findFolder(req.uid, pending) : Promise.reject(e));
-    const draft = draftFrom(page);
+    const draft = draftFrom(page, await coverFor(req, page));
     const row = await albums.saveDraft(req.uid, { ...draft, category: page?.ratio === '9:16' ? 'reel' : 'photo', folderId: folder.id });
-    return { type: 'info', text: `Created “${folder.name}” and saved the current work there.${pictureNote(draft)}`, data: { folderId: folder.id, itemId: row.id } };
+    return { type: 'info', text: savedLine(folder.name, draft, true), data: { folderId: folder.id, itemId: row.id } };
   }
-  if (pending && categoryNamed(text)) {
+  if (pending && categoryNamed(text) && !albumAsk(text)) {
     const category = categoryNamed(text);
-    const draft = draftFrom(page);
+    const draft = draftFrom(page, await coverFor(req, page));
     const row = await albums.saveDraft(req.uid, { ...draft, category, folderId: null });
     const label = category === 'reel' ? 'Reels' : category;
-    return { type: 'info', text: `Saved the current work into the ${label} album.${pictureNote(draft)}`, data: { itemId: row.id } };
+    return { type: 'info', text: savedLine(`the ${label} album`, draft, false), data: { itemId: row.id } };
   }
   const made = folderCreate(text);
   if (made && !albumAsk(text)) {
@@ -114,22 +127,19 @@ async function pageCommand(req, text, page) {
   }
   const ask = albumAsk(text);
   if (ask) {
-    if (!hasWork(page)) return { type: 'info', text: 'There is nothing to save yet. Generate a caption, tags or an image on Posts, then ask again.', data: {} };
+    const cover = await coverFor(req, page);
+    if (!cover && !hasWork(page)) return { type: 'info', text: 'There is nothing to save yet. Attach a photo, or generate one on Posts, then ask again.', data: {} };
+    const draft = draftFrom(page, cover);
     if (ask.kind === 'folder') {
-      const existing = await albums.findFolder(req.uid, ask.name);
-      if (!existing) {
-        const names = (await albums.listFolders(req.uid)).map(f => f.name);
-        const have = names.length ? ` You already have: ${names.join(', ')}.` : '';
-        return { type: 'info', text: `There is no album named ${ask.name}. Should I create it, or save this into another album (Reels, Photos, Carousels, Stories)?${have}`, data: { pendingFolder: ask.name } };
-      }
-      const draft = draftFrom(page);
-      const row = await albums.saveDraft(req.uid, { ...draft, category: page?.ratio === '9:16' ? 'reel' : 'photo', folderId: existing.id });
-      return { type: 'info', text: `Saved the current work into ${existing.name}.${pictureNote(draft)}`, data: { folderId: existing.id, itemId: row.id } };
+      let folder = await albums.findFolder(req.uid, ask.name);
+      let created = false;
+      if (!folder) { folder = await albums.createFolder(req.uid, ask.name); created = true; }
+      const row = await albums.saveDraft(req.uid, { ...draft, category: page?.ratio === '9:16' ? 'reel' : 'photo', folderId: folder.id });
+      return { type: 'info', text: savedLine(folder.name, draft, created), data: { folderId: folder.id, itemId: row.id } };
     }
-    const draft = draftFrom(page);
     const row = await albums.saveDraft(req.uid, { ...draft, category: ask.category, folderId: null });
     const label = ask.category === 'reel' ? 'Reels' : ask.category;
-    return { type: 'info', text: `Saved the current work into the ${label} album.${pictureNote(draft)}`, data: { itemId: row.id } };
+    return { type: 'info', text: savedLine(`the ${label} album`, draft, false), data: { itemId: row.id } };
   }
   if (wantsSchedule(text)) {
     const now = new Date();
@@ -179,6 +189,18 @@ export async function assistant(req, res) {
       if (e.code === '42P01') return res.json({ type: 'info', text: 'Albums are not ready yet. Restart the server so the database can update, then ask again.', data: {} });
       console.error('page command', e.message);
       return res.json({ type: 'info', text: 'I could not do that just now. ' + (e.message || 'Try again.'), data: {} });
+    }
+  }
+  const tweak = imageAdjust(text);
+  if (tweak) {
+    const src = ref || (typeof page?.image === 'string' ? page.image : '');
+    if (!src.startsWith('data:image/')) return res.json({ type: 'info', text: 'Generate an image on Posts first, then ask me to adjust it.', data: {} });
+    try {
+      const image = await adjustImage(src, tweak);
+      const said = { darker: 'Made the image a bit darker.', brighter: 'Made the image a bit brighter.', warmer: 'Made the image a bit warmer.', cooler: 'Made the image a bit cooler.', contrast: 'Added a little contrast.', softer: 'Softened the image.' }[tweak];
+      return res.json({ type: 'info', text: said + ' The caption and tags are unchanged.', data: { imageEdit: image } });
+    } catch (e) {
+      return res.json({ type: 'info', text: e.expose ? e.message : 'I could not adjust that image.', data: {} });
     }
   }
   if (wantsGeneratedImage(text, req.body?.mode)) {

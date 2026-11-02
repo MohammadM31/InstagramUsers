@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captionFromPage, localOpinion, ignoredWork, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, folderCreate, affirmsCreate, categoryNamed, wantsGeneratedImage, imageRequestPrompt } from '../src/pageactions.js';
+import { captionFromPage, localOpinion, ignoredWork, aboutCurrentWork, wantsSchedule, clockFromText, albumAsk, folderCreate, affirmsCreate, categoryNamed, wantsGeneratedImage, imageRequestPrompt, imageAdjust } from '../src/pageactions.js';
 
 const page = { name: 'Posts', prompt: 'iced coffee', ratio: '4:5', captions: [{ hook: 'Cold brew', body: 'Monday fuel', cta: 'Tag a friend' }], tags: { niche: ['coffee', '#cafe'] }, imageCount: 1 };
 
@@ -21,6 +21,8 @@ test('commands: schedule, template folder, reels album, and a yes after the ques
   assert.deepEqual(albumAsk('save the last image to the templates album'), { kind: 'folder', name: 'Templates' });
   assert.deepEqual(albumAsk('save the last image generated to the reels album'), { kind: 'category', category: 'reel' });
   assert.deepEqual(albumAsk('save it to an album named template'), { kind: 'folder', name: 'template' });
+  assert.deepEqual(albumAsk('put this photo into the reference album'), { kind: 'folder', name: 'Reference' });
+  assert.deepEqual(albumAsk('put this photo into the photos album'), { kind: 'category', category: 'photo' });
   assert.equal(albumAsk('what do you think'), null);
   assert.equal(ignoredWork('Instagram tool does not support creating albums.', page), true);
   assert.equal(ignoredWork('The coffee caption is clear and the cafe tag fits the image.', page), false);
@@ -39,6 +41,11 @@ test('1pm today is 13:00 on the same calendar day', () => {
   const d = new Date(iso);
   assert.equal(d.getHours(), 13);
   assert.equal(d.getDate(), 1);
+});
+test('darker changes the current image and does not ask for a new one', () => {
+  assert.equal(imageAdjust('make the image a bit darker'), 'darker');
+  assert.equal(imageAdjust('generate an image of a darker cafe'), null);
+  assert.equal(imageAdjust('what do you think of the tags'), null);
 });
 test('an attached photo is a generation, not a tip about having no posts', () => {
   const said = 'generate an image referenced from this attached image';

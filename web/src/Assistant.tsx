@@ -2,7 +2,7 @@ import {useState,useRef,useEffect,useLayoutEffect} from 'react';
 import type {FormEvent} from 'react';
 import {api} from './api';
 import {ICONS} from './icons';
-import {pagePayload} from './work';
+import {pagePayload,replacePageImage} from './work';
 import {
   nearBottom,newClientId,messageId,patchMessage,appendMessage,pollPatch,pollDelay,POLL_MAX,
   fromServerMessage,retryParams,buildAssistantBody,imageIdsOf,RATIOS,
@@ -22,7 +22,7 @@ const CONVO_KEY='cc.convo'; // the open conversation, so a reload resumes it (pa
 const sleep=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
 
 function Message({m,h}:{m:Msg;h:ImageHandlers}){
-  if(m.role==='user') return <div className="chat-msg user"><div className="bubble">{m.text}</div></div>;
+  if(m.role==='user') return <div className="chat-msg user"><div className="bubble">{typeof m.data?.referenceImage==='string'&&m.data.referenceImage.startsWith('data:image/')&&<img className="user-attach" src={m.data.referenceImage} alt="Attached photo"/>}{m.text}</div></div>;
   if(m.type==='image') return <div className="chat-msg assistant">
     <div className="avatar"><span>AI</span></div>
     <div className="bubble img-bubble"><ImageMessage m={m} h={h}/></div>
@@ -226,7 +226,7 @@ export default function Assistant({
     const attached=o.referenceImage||refImg?.dataUrl;
     const useFile=!!attached&&(o.image||!!o.referenceImage||/\b(this|these|image|photo|picture|file|attach|reference|save|schedule|album)\b/i.test(o.text));
     const file=useFile?attached:undefined;
-    if(o.showUser)setMsgs(l=>appendMessage(l,{id:newClientId(),role:'user',type:'info',text:o.text}));
+    if(o.showUser)setMsgs(l=>appendMessage(l,{id:newClientId(),role:'user',type:'info',text:o.text,data:file?{referenceImage:file}:undefined}));
     // An image request appends its OWN placeholder; nothing already in the thread is touched.
     if(o.image)setMsgs(l=>appendMessage(l,{id:phId,role:'assistant',type:'image',text:'',data:{status:'pending',imageIds:[],ratio:o.ratio,referenceImageId:o.referenceImageId,referenceImage:file,overlayText:o.overlayText,summary:'Sending your request…'}}));
     else setTyping(true);
@@ -234,7 +234,8 @@ export default function Assistant({
       const x=await api<any>('/assistant',{method:'POST',body:buildAssistantBody({text:o.text,conversationId:convoRef.current,image:o.image,ratio:o.ratio,referenceImageId:o.referenceImageId,referenceImage:file,overlayText:o.overlayText,page:{...pagePayload(o.text),attached:!!attached}})});
       if(ep!==epoch.current||!alive.current)return; // the person moved to another chat meanwhile
       if(x.conversationId)setConvo(String(x.conversationId));
-      const d=x.data&&typeof x.data==='object'?x.data:{};
+      const d=x.data&&typeof x.data==='object'?{...x.data}:{};
+      if(typeof d.imageEdit==='string'){replacePageImage(d.imageEdit);delete d.imageEdit}
       const isImg=x.type==='image'&&!!d.jobId;
       const serverId=x.messageId!==undefined&&x.messageId!==null?String(x.messageId):undefined;
       const reply={type:String(x.type||'info'),text:String(x.text||''),serverId,data:isImg?{...d,status:'pending',imageIds:[]}:d};

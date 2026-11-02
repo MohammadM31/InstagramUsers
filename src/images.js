@@ -85,6 +85,28 @@ async function predict(name, prompt, ratio, ref, token) {
   return url;
 }
 
+const ADJUST = {
+  darker: { brightness: 0.82 },
+  brighter: { brightness: 1.18 },
+  warmer: { brightness: 1.02, saturation: 1.12, hue: 12 },
+  cooler: { brightness: 1.02, saturation: 0.92, hue: -12 },
+  contrast: { brightness: 1.02, saturation: 1.08 },
+  softer: { brightness: 1.04, saturation: 0.9 },
+};
+
+// A tweak of the picture the user already has. Tags and caption are not involved.
+export async function adjustImage(dataUrl, kind) {
+  const spec = ADJUST[kind];
+  if (!spec) { const e = new Error('That adjustment is not available.'); e.expose = true; throw e; }
+  const m = /^data:image\/[a-z0-9.+-]+;base64,([a-z0-9+/=\s]+)$/i.exec(String(dataUrl || ''));
+  if (!m) { const e = new Error('Generate an image on Posts first, then ask me to adjust it.'); e.expose = true; throw e; }
+  let img = sharp(Buffer.from(m[1].replace(/\s/g, ''), 'base64')).modulate(spec);
+  if (kind === 'contrast') img = img.linear(1.15, -18);
+  if (kind === 'softer') img = img.blur(0.4);
+  const out = await img.jpeg({ quality: 82 }).toBuffer();
+  return 'data:image/jpeg;base64,' + out.toString('base64');
+}
+
 export async function generateImage({ prompt, ratio = '1:1', model, overlayText, color = '#ffffff', n = 1, referenceImage, uid }) {
   const token = await tokenFor(uid);
   if (!token) throw Object.assign(new Error('REPLICATE_API_TOKEN not set'), { status: 503 });

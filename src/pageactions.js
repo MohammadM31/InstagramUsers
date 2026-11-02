@@ -68,6 +68,19 @@ export function aboutCurrentWork(text) {
   return /\b(what do you think|current|these|this generation|these generations|the tags|the hashtags|my tags|my hashtags|the caption|my caption|the image|this image|my image|my generation)\b/i.test(String(text || ''));
 }
 
+// A small change to the image already on Posts. A brand-new picture ("generate a darker cafe") is not this.
+export function imageAdjust(text) {
+  const t = String(text || '');
+  if (/\b(generate|draw|design|new image|another image)\b/i.test(t)) return null;
+  if (/\b(darker|dimmer|darken)\b/i.test(t)) return 'darker';
+  if (/\b(brighter|lighter|lighten)\b/i.test(t)) return 'brighter';
+  if (/\bwarmer\b/i.test(t)) return 'warmer';
+  if (/\bcooler\b/i.test(t)) return 'cooler';
+  if (/\b(more contrast|higher contrast)\b/i.test(t)) return 'contrast';
+  if (/\b(less contrast|softer)\b/i.test(t)) return 'softer';
+  return null;
+}
+
 export function wantsSchedule(text) {
   const t = String(text || '');
   if (/\bschedule\b/i.test(t)) return true;
@@ -123,20 +136,32 @@ export function folderCreate(text) {
   return null;
 }
 
-// Save into a named folder (Templates) or a built-in album category (Reels). Null when this is not a save command.
+// The album they named as the destination. "this photo" is the picture, not the Photos album.
+function destinationName(raw) {
+  const named = String(raw).match(/\b(?:named|called|titled)\s+["'“]?(.+?)["'”]?(?=\s+(?:in|on|under|inside|or|for|to|and)\b|[.?!,]|$)/i);
+  if (named) return { explicit: true, name: cleanFolderName(named[1]) };
+  const dest = String(raw).match(/\b(?:into|to|in)\s+(?:the\s+|an?\s+)?["'“]?([a-z0-9][\w'’-]*(?:\s+[\w'’-]+){0,3})["'”]?\s+(?:albums?|folders?)\b/i);
+  if (dest) return { explicit: false, name: cleanFolderName(dest[1]) };
+  const bare = String(raw).match(/\b(?:into|to|in)\s+(?:the\s+)?(reels?|photos?|carousels?|stor(?:y|ies)|templates?)\b/i);
+  if (bare) return { explicit: false, name: cleanFolderName(bare[1]) };
+  return null;
+}
+
+function albumFromName(got) {
+  if (!got?.name) return null;
+  if (got.explicit) return { kind: 'folder', name: got.name };
+  const category = categoryNamed(got.name);
+  if (category) return { kind: 'category', category };
+  if (/^templates?$/i.test(got.name)) return { kind: 'folder', name: 'Templates' };
+  return { kind: 'folder', name: got.name.charAt(0).toUpperCase() + got.name.slice(1) };
+}
+
+// Save into a named folder (Reference, Templates) or a built-in album category (Reels). Null when this is not a save command.
 export function albumAsk(text) {
   const t = String(text || '').toLowerCase();
   if (!/\b(save|put|add|store)\b/.test(t)) return null;
   if (!/\b(album|folder|template|reel|photo|carousel|story|stories)\b/.test(t)) return null;
-  const named = String(text || '').match(/\b(?:named|called|titled)\s+["'“]?(.+?)["'”]?(?=\s+(?:in|on|under|inside|or|for|to|and)\b|[.?!,]|$)/i);
-  if (named) {
-    const name = cleanFolderName(named[1]);
-    if (name) return { kind: 'folder', name };
-  }
-  if (/\btemplates?\b/.test(t)) return { kind: 'folder', name: 'Templates' };
-  const category = categoryNamed(t);
-  if (category) return { kind: 'category', category };
-  return { kind: 'folder', name: 'Templates' };
+  return albumFromName(destinationName(text));
 }
 
 export function affirmsCreate(text) {
